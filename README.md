@@ -20,7 +20,7 @@ bun run build           # 检查类型并构建前端
 bun run desktop:build   # 打包当前平台的桌面应用
 ```
 
-桌面应用从启动进程的 `OPENROUTER_API_KEY` 环境变量读取密钥。双击安装包不会继承开发终端的环境变量；第一版请从已设置环境变量的终端启动桌面应用进行 Agent 测试。默认 API 地址是 `https://openrouter.ai/api/v1`，模型是 `stealth/space-bunny-alpha`。不要使用 `VITE_` 环境变量传递密钥，否则 Vite 会将它嵌入前端资源。
+桌面应用从启动进程的 `OPENROUTER_API_KEY` 环境变量读取密钥。双击安装包不会继承开发终端的环境变量；第一版请从已设置环境变量的终端启动桌面应用进行 Agent 测试。默认 API 地址是 `https://openrouter.ai/api/v1`，模型是 `stealth/space-bunny-alpha`；分别可用 `OPENROUTER_BASE_URL` 和 `OPENROUTER_MODEL` 覆盖，空白值按默认值处理。Bun 会自动加载仓库根目录的 `.env.local`，因此本地测试凭据可以只放在该文件（已被 `.gitignore` 排除）而无需写入终端环境。不要使用 `VITE_` 环境变量传递密钥，否则 Vite 会将它嵌入前端资源。
 
 ## 使用方式
 

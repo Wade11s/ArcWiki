@@ -27,4 +27,20 @@ describe("loadConfig", () => {
     });
     expect(config.openRouterApiKey).toBeUndefined();
   });
+
+  test("reads the model from OPENROUTER_MODEL when set", () => {
+    const config = loadConfig({
+      ARCWIKI_SESSION_TOKEN: "session-token",
+      OPENROUTER_MODEL: "some-vendor/other-model",
+    });
+    expect(config.model).toBe("some-vendor/other-model");
+  });
+
+  test("treats a blank model as the default", () => {
+    const config = loadConfig({
+      ARCWIKI_SESSION_TOKEN: "session-token",
+      OPENROUTER_MODEL: "  ",
+    });
+    expect(config.model).toBe(OPENROUTER_MODEL);
+  });
 });

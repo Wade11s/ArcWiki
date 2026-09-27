@@ -56,12 +56,14 @@ export function loadConfig(env: EnvMap = process.env): SidecarConfig {
   const baseUrl =
     readTrimmed(env, "OPENROUTER_BASE_URL") ?? DEFAULT_OPENROUTER_BASE_URL;
 
+  const model = readTrimmed(env, "OPENROUTER_MODEL") ?? OPENROUTER_MODEL;
+
   return {
     host: LOOPBACK_HOST,
     port: parsePort(readTrimmed(env, "ARCWIKI_PORT")),
     sessionToken,
     openRouterApiKey: readTrimmed(env, "OPENROUTER_API_KEY"),
     openRouterBaseUrl: baseUrl.replace(/\/+$/, ""),
-    model: OPENROUTER_MODEL,
+    model,
   };
 }
