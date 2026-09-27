@@ -70,7 +70,7 @@ function sendJson(
   body: unknown,
   origin: string | undefined,
 ): void {
-  if (res.headersSent) return;
+  if (res.headersSent || res.destroyed) return;
   applyCors(req, res, origin);
   res.setHeader("Content-Type", "application/json; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
@@ -162,6 +162,7 @@ function requireOrigin(origin: string | undefined): void {
 
 async function handleChat(
   req: IncomingMessage,
+  res: ServerResponse,
   ctx: RequestContext,
 ): Promise<{ text: string }> {
   if (!ctx.config.openRouterApiKey) {
@@ -197,11 +198,15 @@ async function handleChat(
   const ac = new AbortController();
   const onAborted = () => ac.abort();
   req.once("aborted", onAborted);
+  // Once the request body is read, req's "aborted" event no longer reports
+  // a client that closes the response while the model is still working.
+  res.once("close", onAborted);
   try {
     const text = await ctx.responder(messages, ac.signal);
     return { text };
   } finally {
     req.off("aborted", onAborted);
+    res.off("close", onAborted);
   }
 }
 
@@ -243,7 +248,7 @@ async function handleRequest(
       if (method !== "POST") {
         throw httpError(405, "method_not_allowed", "Use POST for /api/chat.");
       }
-      const body = await handleChat(req, ctx);
+      const body = await handleChat(req, res, ctx);
       sendJson(req, res, 200, body, origin);
       return;
     }

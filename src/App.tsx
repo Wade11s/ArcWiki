@@ -15,7 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import type {
   ChangeEvent,
@@ -26,6 +26,11 @@ import type {
 } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import {
+  MAX_BODY_BYTES,
+  MAX_CONTENT_CHARS,
+  MAX_MESSAGES,
+} from "../shared/agentContract";
 import {
   personalMarkdown,
   researchMarkdown,
@@ -67,6 +72,7 @@ type Workspace = {
   activeTabId: string;
   lastTabBySpace: Record<string, string>;
   conversations: Record<string, ChatMessage[]>;
+  drafts: Record<string, string>;
 };
 
 type AgentStatus =
@@ -76,6 +82,7 @@ type AgentStatus =
   | { state: "error"; message: string }
   | { state: "ready"; port: number; token: string };
 
+type ReadyAgent = Extract<AgentStatus, { state: "ready" }>;
 type BackendConnection = { port: number; token: string };
 
 const STORAGE_KEY = "arcwiki.workspace.v1";
@@ -171,6 +178,7 @@ function createDefaultWorkspace(): Workspace {
       personal: "daily-note",
     },
     conversations: {},
+    drafts: {},
   };
 }
 
@@ -290,6 +298,18 @@ function loadWorkspace(): Workspace {
       }
     }
 
+    const drafts: Record<string, string> = {};
+    if ("drafts" in saved && saved.drafts && typeof saved.drafts === "object") {
+      for (const [tabId, value] of Object.entries(saved.drafts)) {
+        if (
+          tabs.some((tab) => tab.id === tabId && tab.kind === "thread") &&
+          typeof value === "string"
+        ) {
+          drafts[tabId] = value.slice(0, MAX_CONTENT_CHARS);
+        }
+      }
+    }
+
     return {
       version: 1,
       spaces,
@@ -298,6 +318,7 @@ function loadWorkspace(): Workspace {
       activeTabId,
       lastTabBySpace,
       conversations,
+      drafts,
     };
   } catch {
     return fallback;
@@ -359,6 +380,27 @@ function SafeMarkdownLink({
 
 const markdownComponents = { a: SafeMarkdownLink };
 
+// History stays local; send only the recent context that fits the sidecar's
+// message and byte limits, beginning at a user turn.
+function modelContext(messages: ChatMessage[]) {
+  let context: Pick<ChatMessage, "role" | "content">[] = [];
+  const encoder = new TextEncoder();
+  for (let i = messages.length - 1; i >= 0 && context.length < MAX_MESSAGES; i--) {
+    const { role, content } = messages[i];
+    // Replies and older saved messages are not constrained by the composer.
+    // Stop at an invalid turn rather than making every future send fail.
+    if (content.length > MAX_CONTENT_CHARS) break;
+    const candidate = [{ role, content }, ...context];
+    if (encoder.encode(JSON.stringify({ messages: candidate })).byteLength > MAX_BODY_BYTES) {
+      break;
+    }
+    context = candidate;
+  }
+  // A truncated window must not begin with an orphaned assistant reply.
+  const firstUser = context.findIndex((message) => message.role === "user");
+  return firstUser < 0 ? [] : context.slice(firstUser);
+}
+
 function App() {
   const isDesktopRuntime = isTauri();
   const [workspace, setWorkspace] = useState<Workspace>(loadWorkspace);
@@ -367,11 +409,7 @@ function App() {
   });
   const [importError, setImportError] = useState("");
   const [notice, setNotice] = useState("");
-  const [draft, setDraft] = useState("");
-  const [sending, setSending] = useState<{
-    threadId: string;
-    step: number;
-  } | null>(null);
+  const [sending, setSending] = useState<Record<string, number>>({});
   const [threadErrors, setThreadErrors] = useState<Record<string, string>>({});
   const [spaceTransition, setSpaceTransition] = useState<{
     direction: 1 | -1;
@@ -384,10 +422,14 @@ function App() {
   const importInputRef = useRef<HTMLInputElement>(null);
   const sidebarRef = useRef<HTMLElement | null>(null);
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
+  const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
   const backendCheckId = useRef(0);
   const spaceMotionFrame = useRef<number | undefined>(undefined);
   const spaceMotionTimer = useRef<number | undefined>(undefined);
   const viewTransitionId = useRef(0);
+  const pendingRequests = useRef<Record<string, AbortController>>({});
+  const lastVisibleThread = useRef({ tabId: "", count: 0 });
+  const shouldFollowThread = useRef(true);
 
   const activeSpace =
     workspace.spaces.find((space) => space.id === workspace.activeSpaceId) ??
@@ -407,13 +449,43 @@ function App() {
   const activeMessages = activeTab
     ? (workspace.conversations[activeTab.id] ?? [])
     : [];
+  const draft = activeTab ? (workspace.drafts[activeTab.id] ?? "") : "";
   const isReady = agentStatus.state === "ready";
 
-  useEffect(() => {
-    if (contentScrollRef.current) {
-      contentScrollRef.current.scrollTop = 0;
-    }
+  const updateDraft = useCallback((tabId: string, value: string) => {
+    setWorkspace((current) => ({
+      ...current,
+      drafts: { ...current.drafts, [tabId]: value },
+    }));
+  }, []);
+
+  useLayoutEffect(() => {
+    const input = composerInputRef.current;
+    if (!input) return;
+    input.style.height = "auto";
+    input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
+  }, [activeTab?.id, draft]);
+
+  useLayoutEffect(() => {
+    const scroll = contentScrollRef.current;
+    if (!scroll) return;
+    scroll.scrollTop = activeTab?.kind === "thread" ? scroll.scrollHeight : 0;
+    shouldFollowThread.current = true;
   }, [activeTab?.id]);
+
+  useLayoutEffect(() => {
+    if (!activeTab || activeTab.kind !== "thread") return;
+    const previous = lastVisibleThread.current;
+    lastVisibleThread.current = { tabId: activeTab.id, count: activeMessages.length };
+    if (
+      previous.tabId === activeTab.id &&
+      activeMessages.length > previous.count &&
+      shouldFollowThread.current
+    ) {
+      const scroll = contentScrollRef.current;
+      if (scroll) scroll.scrollTop = scroll.scrollHeight;
+    }
+  }, [activeTab?.id, activeMessages.length]);
 
   useEffect(() => {
     try {
@@ -422,6 +494,10 @@ function App() {
       // The workspace remains usable when storage is disabled or full.
     }
   }, [workspace]);
+
+  useEffect(() => () => {
+    Object.values(pendingRequests.current).forEach((request) => request.abort());
+  }, []);
 
   const checkBackend = useCallback(async () => {
     const checkId = ++backendCheckId.current;
@@ -566,7 +642,6 @@ function App() {
         [tab.spaceId]: tab.id,
       },
     }));
-    setDraft("");
     setImportError("");
     setNotice("");
     setIsEditingNote(false);
@@ -580,7 +655,6 @@ function App() {
     if (toIndex < 0 || fromIndex === toIndex) return;
     animateSpaceTransition(toIndex > fromIndex ? 1 : -1, () => {
       setWorkspace((current) => openSpace(current, spaceId));
-      setDraft("");
       setImportError("");
       setNotice("");
       setIsEditingNote(false);
@@ -603,7 +677,6 @@ function App() {
           current.spaces.length;
         return openSpace(current, current.spaces[nextIndex].id);
       });
-      setDraft("");
       setNotice("");
       setIsEditingNote(false);
     });
@@ -636,7 +709,6 @@ function App() {
           [tab.spaceId]: id,
         },
       }));
-      setDraft("");
       setImportError("");
       setNotice("");
       setIsEditingNote(false);
@@ -645,6 +717,22 @@ function App() {
   );
 
   const closeTab = useCallback((tabId: string) => {
+    const tab = workspace.tabs.find((item) => item.id === tabId);
+    if (!tab || workspace.tabs.filter((item) => item.spaceId === tab.spaceId).length < 2) {
+      return;
+    }
+    pendingRequests.current[tabId]?.abort();
+    delete pendingRequests.current[tabId];
+    setSending((current) => {
+      const next = { ...current };
+      delete next[tabId];
+      return next;
+    });
+    setThreadErrors((current) => {
+      const next = { ...current };
+      delete next[tabId];
+      return next;
+    });
     setWorkspace((current) => {
       const closingTab = current.tabs.find((tab) => tab.id === tabId);
       if (
@@ -663,6 +751,8 @@ function App() {
             nextTabs[0];
       const conversations = { ...current.conversations };
       delete conversations[tabId];
+      const drafts = { ...current.drafts };
+      delete drafts[tabId];
       const lastTabBySpace = { ...current.lastTabBySpace };
       if (lastTabBySpace[closingTab.spaceId] === tabId) {
         const replacement = nextTabs.find(
@@ -679,12 +769,12 @@ function App() {
         activeSpaceId: nextActive.spaceId,
         lastTabBySpace,
         conversations,
+        drafts,
       };
     });
-    setDraft("");
     setImportError("");
     setIsEditingNote(false);
-  }, []);
+  }, [workspace.tabs]);
 
   const importMarkdown = useCallback(
     async (file?: File) => {
@@ -735,60 +825,48 @@ function App() {
 
   const handleThreadKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-      if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      const sendModifier = navigator.platform.startsWith("Mac")
+        ? event.metaKey
+        : event.ctrlKey;
+      if (event.key === "Enter" && sendModifier && !event.nativeEvent.isComposing) {
         event.preventDefault();
-        const form = event.currentTarget.form;
-        form?.requestSubmit();
+        event.currentTarget.form?.requestSubmit();
       }
     },
     [],
   );
 
-  const submitMessage = useCallback(
-    async (event: FormEvent<HTMLFormElement>) => {
-      event.preventDefault();
-      const tab = activeTab;
-      const message = draft.trim();
+  const sendThreadMessages = useCallback(
+    async (tabId: string, messages: ChatMessage[], connection: ReadyAgent) => {
+      if (pendingRequests.current[tabId]) return;
+      const context = modelContext(messages);
+      const latest = context.at(-1);
       if (
-        !tab ||
-        tab.kind !== "thread" ||
-        !message ||
-        agentStatus.state !== "ready" ||
-        sending
+        !latest ||
+        latest.role !== "user" ||
+        latest.content.length > MAX_CONTENT_CHARS
       ) {
+        setThreadErrors((current) => ({
+          ...current,
+          [tabId]: "This message is too long for the agent. Send a shorter message.",
+        }));
         return;
       }
 
-      const userMessage: ChatMessage = {
-        id: makeId("message"),
-        role: "user",
-        content: message,
-        createdAt: Date.now(),
-      };
-      const previousMessages = workspace.conversations[tab.id] ?? [];
-      const requestMessages = [...previousMessages, userMessage];
-
-      setWorkspace((current) => ({
-        ...current,
-        conversations: {
-          ...current.conversations,
-          [tab.id]: requestMessages,
-        },
-      }));
-      setDraft("");
+      const controller = new AbortController();
+      pendingRequests.current[tabId] = controller;
       setThreadErrors((current) => {
         const next = { ...current };
-        delete next[tab.id];
+        delete next[tabId];
         return next;
       });
-      setSending({ threadId: tab.id, step: 0 });
-
+      setSending((current) => ({ ...current, [tabId]: 0 }));
       const progressInterval = window.setInterval(() => {
         setSending((current) =>
-          current && current.threadId === tab.id
+          tabId in current
             ? {
                 ...current,
-                step: Math.min(current.step + 1, PROGRESS_STEPS.length - 1),
+                [tabId]: Math.min(current[tabId] + 1, PROGRESS_STEPS.length - 1),
               }
             : current,
         );
@@ -796,19 +874,15 @@ function App() {
 
       try {
         const response = await fetch(
-          `http://127.0.0.1:${agentStatus.port}/api/chat`,
+          `http://127.0.0.1:${connection.port}/api/chat`,
           {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              Authorization: `Bearer ${agentStatus.token}`,
+              Authorization: `Bearer ${connection.token}`,
             },
-            body: JSON.stringify({
-              messages: requestMessages.map(({ role, content }) => ({
-                role,
-                content,
-              })),
-            }),
+            body: JSON.stringify({ messages: context }),
+            signal: controller.signal,
           },
         );
         const result = (await response.json()) as {
@@ -834,33 +908,92 @@ function App() {
           content: result.text,
           createdAt: Date.now(),
         };
-        setWorkspace((current) => ({
-          ...current,
-          conversations: {
-            ...current.conversations,
-            [tab.id]: [
-              ...(current.conversations[tab.id] ?? requestMessages),
-              assistantMessage,
-            ],
-          },
-        }));
+        if (controller.signal.aborted) return;
+        setWorkspace((current) => {
+          const conversation = current.conversations[tabId];
+          if (
+            !current.tabs.some((tab) => tab.id === tabId && tab.kind === "thread") ||
+            conversation?.at(-1)?.id !== messages.at(-1)?.id
+          ) {
+            return current;
+          }
+          return {
+            ...current,
+            conversations: {
+              ...current.conversations,
+              [tabId]: [...conversation, assistantMessage],
+            },
+          };
+        });
       } catch (error) {
-        setThreadErrors((current) => ({
-          ...current,
-          [tab.id]:
-            error instanceof Error
-              ? error.message
-              : "The agent couldn't complete that reply.",
-        }));
+        if (!controller.signal.aborted) {
+          setThreadErrors((current) => ({
+            ...current,
+            [tabId]:
+              error instanceof Error
+                ? error.message
+                : "The agent couldn't complete that reply.",
+          }));
+        }
       } finally {
         window.clearInterval(progressInterval);
-        setSending((current) =>
-          current?.threadId === tab.id ? null : current,
-        );
+        if (pendingRequests.current[tabId] === controller) {
+          delete pendingRequests.current[tabId];
+          setSending((current) => {
+            const next = { ...current };
+            delete next[tabId];
+            return next;
+          });
+        }
       }
     },
-    [activeTab, agentStatus, draft, sending, workspace.conversations],
+    [],
   );
+
+  const submitMessage = useCallback(
+    (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      const tab = activeTab;
+      const message = draft.trim();
+      if (
+        !tab ||
+        tab.kind !== "thread" ||
+        !message ||
+        agentStatus.state !== "ready" ||
+        pendingRequests.current[tab.id]
+      ) {
+        return;
+      }
+
+      const userMessage: ChatMessage = {
+        id: makeId("message"),
+        role: "user",
+        content: message,
+        createdAt: Date.now(),
+      };
+      const requestMessages = [
+        ...(workspace.conversations[tab.id] ?? []),
+        userMessage,
+      ];
+      setWorkspace((current) => ({
+        ...current,
+        conversations: {
+          ...current.conversations,
+          [tab.id]: [...(current.conversations[tab.id] ?? []), userMessage],
+        },
+        drafts: { ...current.drafts, [tab.id]: "" },
+      }));
+      void sendThreadMessages(tab.id, requestMessages, agentStatus);
+    },
+    [activeTab, agentStatus, draft, sendThreadMessages, workspace.conversations],
+  );
+
+  const retryMessage = useCallback(() => {
+    if (!activeTab || agentStatus.state !== "ready") return;
+    const messages = workspace.conversations[activeTab.id] ?? [];
+    if (messages.at(-1)?.role !== "user") return;
+    void sendThreadMessages(activeTab.id, messages, agentStatus);
+  }, [activeTab, agentStatus, sendThreadMessages, workspace.conversations]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -958,11 +1091,13 @@ function App() {
 
   if (!activeSpace || !activeTab) return null;
 
+  const sendingThisThread = activeTab.id in sending;
   const currentProgress =
-    sending?.threadId === activeTab.id
-      ? PROGRESS_STEPS[sending.step]
-      : undefined;
-  const currentError = threadErrors[activeTab.id];
+    sendingThisThread ? PROGRESS_STEPS[sending[activeTab.id]] : undefined;
+  const currentError = threadErrors[activeTab.id] ??
+    (!sendingThisThread && activeMessages.at(-1)?.role === "user"
+      ? "This message has no reply yet. Retry to ask the agent again."
+      : undefined);
 
   return (
     <main
@@ -1190,6 +1325,12 @@ function App() {
         <div
           ref={contentScrollRef}
           className={`content-scroll${spaceTransition ? ` space-transition-${spaceTransition.phase}` : ""}`}
+          onScroll={(event) => {
+            if (activeTab.kind !== "thread") return;
+            const scroll = event.currentTarget;
+            shouldFollowThread.current =
+              scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 96;
+          }}
           style={
             {
               "--space-transition-direction": spaceTransition?.direction ?? 1,
@@ -1231,10 +1372,12 @@ function App() {
                   A quiet place to think something through. Conversations stay
                   with this workspace.
                 </p>
-                <AgentAvailability
-                  status={agentStatus}
-                  onRetry={() => void checkBackend()}
-                />
+                {agentStatus.state !== "ready" && (
+                  <AgentAvailability
+                    status={agentStatus}
+                    onRetry={() => void checkBackend()}
+                  />
+                )}
               </div>
 
               <div className="conversation" aria-live="polite">
@@ -1255,7 +1398,7 @@ function App() {
                         type="button"
                         disabled={!isReady}
                         onClick={() =>
-                          setDraft("Help me turn a rough idea into a clear plan.")
+                          updateDraft(activeTab.id, "Help me turn a rough idea into a clear plan.")
                         }
                       >
                         <span>↗</span> Help me find the shape of an idea
@@ -1264,7 +1407,7 @@ function App() {
                         type="button"
                         disabled={!isReady}
                         onClick={() =>
-                          setDraft("What questions should I ask before I begin?")
+                          updateDraft(activeTab.id, "What questions should I ask before I begin?")
                         }
                       >
                         <span>↗</span> What should I think through first?
@@ -1278,13 +1421,11 @@ function App() {
                     className={`message-row ${message.role === "user" ? "from-user" : "from-agent"}`}
                     key={message.id}
                   >
-                    <div className="message-avatar" aria-hidden="true">
-                      {message.role === "user" ? (
-                        <span>A</span>
-                      ) : (
+                    {message.role === "assistant" && (
+                      <div className="message-avatar" aria-hidden="true">
                         <Sparkles />
-                      )}
-                    </div>
+                      </div>
+                    )}
                     <div className="message-body">
                       <div className="message-author">
                         <strong>{message.role === "user" ? "You" : "ArcWiki agent"}</strong>
@@ -1342,64 +1483,60 @@ function App() {
                       <strong>That reply didn’t come through</strong>
                       <p>{currentError}</p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setThreadErrors((current) => {
-                          const next = { ...current };
-                          delete next[activeTab.id];
-                          return next;
-                        })
-                      }
-                    >
-                      Dismiss
-                    </button>
+                    {activeMessages.at(-1)?.role === "user" && (
+                      <button type="button" onClick={retryMessage} disabled={!isReady}>
+                        Retry
+                      </button>
+                    )}
                   </div>
                 )}
-              </div>
-
-              <form className="composer" onSubmit={submitMessage}>
-                <label className="sr-only" htmlFor="agent-message">
-                  Message the local agent
-                </label>
-                <textarea
-                  id="agent-message"
-                  value={draft}
-                  onChange={(event) => setDraft(event.target.value)}
-                  onKeyDown={handleThreadKeyDown}
-                  placeholder={
-                    isReady
-                      ? "Write a message…"
-                      : "Agent is unavailable in this window"
-                  }
-                  rows={2}
-                  disabled={!isReady || Boolean(sending)}
-                />
-                <div className="composer-footer">
-                  <div className="composer-hint">
-                    <span className="composer-private-dot" />
-                    <span>History saved locally</span>
-                    <span className="hint-divider">·</span>
-                    <span>↵ to send</span>
+                <div className="message-row from-user is-draft">
+                  <div className="message-body">
+                    <div className="message-author">
+                      <strong>You</strong>
+                    </div>
+                    <form className="message-bubble inline-composer" onSubmit={submitMessage}>
+                      <label className="sr-only" htmlFor="agent-message">
+                        Message the local agent
+                      </label>
+                      <textarea
+                        ref={composerInputRef}
+                        id="agent-message"
+                        value={draft}
+                        onChange={(event) => updateDraft(activeTab.id, event.target.value)}
+                        onKeyDown={handleThreadKeyDown}
+                        placeholder={
+                          isReady
+                            ? "Write a message…"
+                            : "Agent is unavailable in this window"
+                        }
+                        rows={1}
+                        maxLength={MAX_CONTENT_CHARS}
+                        disabled={!isReady || sendingThisThread}
+                      />
+                      <div className="inline-composer-footer">
+                        <span>
+                          {navigator.platform.startsWith("Mac") ? "⌘" : "Ctrl+"} Enter to send
+                          <span aria-hidden="true"> · </span>
+                          Sent to OpenRouter
+                        </span>
+                        <button
+                          className="send-button"
+                          type="submit"
+                          disabled={!isReady || !draft.trim() || sendingThisThread}
+                        >
+                          {sendingThisThread ? (
+                            <LoaderCircle className="spin-icon" aria-hidden="true" />
+                          ) : (
+                            <Send aria-hidden="true" />
+                          )}
+                          <span>{sendingThisThread ? "Sending" : "Send"}</span>
+                        </button>
+                      </div>
+                    </form>
                   </div>
-                  <button
-                    className="send-button"
-                    type="submit"
-                    disabled={!isReady || !draft.trim() || Boolean(sending)}
-                  >
-                    {sending ? (
-                      <LoaderCircle className="spin-icon" aria-hidden="true" />
-                    ) : (
-                      <Send aria-hidden="true" />
-                    )}
-                    <span>{sending ? "Sending" : "Send"}</span>
-                  </button>
                 </div>
-              </form>
-              <p className="thread-footnote">
-                Your history is saved locally; messages are sent to OpenRouter
-                for the agent to reply.
-              </p>
+              </div>
             </section>
           ) : (
             <article
@@ -1485,24 +1622,9 @@ function AgentAvailability({
   status,
   onRetry,
 }: {
-  status: AgentStatus;
+  status: Exclude<AgentStatus, { state: "ready" }>;
   onRetry: () => void;
 }) {
-  if (status.state === "ready") {
-    return (
-      <div className="agent-availability is-online" role="status">
-        <span className="availability-mark">
-          <Check aria-hidden="true" />
-        </span>
-        <div>
-          <strong>Local agent connected</strong>
-          <span>History is local; requests are sent to OpenRouter.</span>
-        </div>
-        <span className="connected-pulse" aria-hidden="true" />
-      </div>
-    );
-  }
-
   if (status.state === "checking") {
     return (
       <div className="agent-availability is-checking" role="status">

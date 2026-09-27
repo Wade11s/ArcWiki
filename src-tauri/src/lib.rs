@@ -118,8 +118,12 @@ async fn get_backend_connection(
 }
 
 pub fn run() {
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
+    let builder = tauri::Builder::default().plugin(tauri_plugin_shell::init());
+    // The embedded WebDriver server is never present in normal desktop builds.
+    #[cfg(feature = "e2e")]
+    let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+
+    let app = builder
         .manage(BackendState::default())
         .invoke_handler(tauri::generate_handler![get_backend_connection])
         .setup(|app| {

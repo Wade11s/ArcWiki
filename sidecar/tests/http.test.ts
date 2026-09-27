@@ -193,6 +193,36 @@ describe("sidecar HTTP", () => {
     );
   });
 
+  test("cancelling a chat response aborts the model request", async () => {
+    const started = Promise.withResolvers<void>();
+    const cancelled = Promise.withResolvers<void>();
+    sidecar = await startTestSidecar({
+      env: { OPENROUTER_API_KEY: TEST_KEY },
+      responder: async (_messages, signal) => {
+        started.resolve();
+        await new Promise<void>((resolve) => {
+          signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        cancelled.resolve();
+        return "unused";
+      },
+    });
+    const controller = new AbortController();
+    const request = api(sidecar, "/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "hello" }] }),
+      signal: controller.signal,
+    });
+    await started.promise;
+    controller.abort();
+    await expect(request).rejects.toThrow();
+    await Promise.race([
+      cancelled.promise,
+      Bun.sleep(1_000).then(() => { throw new Error("model request was not aborted"); }),
+    ]);
+  });
+
   test("POST /api/chat rejects oversized bodies", async () => {
     sidecar = await startTestSidecar({
       env: { OPENROUTER_API_KEY: TEST_KEY },

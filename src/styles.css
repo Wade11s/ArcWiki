@@ -1450,16 +1450,6 @@ html[data-space-transitioning] .app-shell {
   height: 11px;
 }
 
-.connected-pulse {
-  width: 7px;
-  height: 7px;
-  flex: 0 0 7px;
-  margin: 0 5px;
-  border-radius: 50%;
-  background: #7eb392;
-  box-shadow: 0 0 0 4px rgba(126, 179, 146, 0.13);
-}
-
 .conversation {
   display: flex;
   min-height: 0;
@@ -1607,7 +1597,10 @@ html[data-space-transitioning] .app-shell {
   display: flex;
   align-items: flex-start;
   gap: 11px;
-  animation: message-arrive 180ms ease-out both;
+}
+
+.message-row.is-draft {
+  margin-top: auto;
 }
 
 .message-avatar {
@@ -1617,25 +1610,16 @@ html[data-space-transitioning] .app-shell {
   flex: 0 0 27px;
   place-items: center;
   margin-top: 1px;
-  border: 1px solid rgba(98, 94, 104, 0.11);
+  border: 1px solid rgba(112, 151, 133, 0.17);
   border-radius: 9px;
-  background: linear-gradient(135deg, #eee9f7, #f8ede4);
-  color: #79758a;
-  font-family: var(--serif);
-  font-size: 12px;
+  background: linear-gradient(145deg, #eef6f0, #f1f1fa);
+  color: #759280;
 }
 
 .message-avatar svg {
   width: 14px;
   height: 14px;
   stroke-width: 1.7;
-}
-
-.agent-avatar,
-.from-agent .message-avatar {
-  border-color: rgba(112, 151, 133, 0.17);
-  background: linear-gradient(145deg, #eef6f0, #f1f1fa);
-  color: #759280;
 }
 
 .message-body {
@@ -1684,18 +1668,19 @@ html[data-space-transitioning] .app-shell {
 
 .from-user .message-bubble {
   border-color: color-mix(in srgb, var(--space-accent) 13%, #eee);
-  border-radius: 13px 4px 13px 13px;
+  border-radius: 4px 13px 13px;
   background: color-mix(in srgb, var(--space-tint) 30%, white);
 }
 
 .from-user .message-body {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: flex-start;
+  padding-left: 38px;
 }
 
 .from-user .message-author {
-  justify-content: flex-end;
+  justify-content: flex-start;
 }
 
 .message-markdown {
@@ -1852,35 +1837,34 @@ html[data-space-transitioning] .app-shell {
   background: rgba(164, 105, 84, 0.08);
 }
 
-.composer {
+.thread-error > button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.inline-composer {
   display: flex;
-  min-height: 105px;
+  width: min(100%, 560px);
   flex-direction: column;
-  padding: 12px 12px 9px 15px;
-  border: 1px solid rgba(83, 81, 86, 0.15);
-  border-radius: 13px;
-  background: rgba(255, 255, 255, 0.87);
-  box-shadow:
-    0 8px 23px rgba(45, 43, 44, 0.045),
-    0 1px 2px rgba(41, 39, 39, 0.035);
+  gap: 8px;
   transition:
     border-color 140ms ease,
     box-shadow 140ms ease;
 }
 
-.composer:focus-within {
+.inline-composer:focus-within {
   border-color: color-mix(in srgb, var(--space-accent) 38%, #ddd);
   box-shadow:
-    0 8px 25px rgba(45, 43, 44, 0.055),
+    0 3px 9px rgba(40, 38, 41, 0.025),
     0 0 0 3px color-mix(in srgb, var(--space-accent) 9%, transparent);
 }
 
-.composer textarea {
+.inline-composer textarea {
   width: 100%;
-  min-height: 50px;
-  flex: 1;
-  resize: vertical;
-  padding: 1px 1px 7px;
+  min-height: 23px;
+  max-height: 160px;
+  resize: none;
+  padding: 0;
   border: 0;
   outline: 0;
   background: transparent;
@@ -1889,20 +1873,20 @@ html[data-space-transitioning] .app-shell {
   line-height: 1.65;
 }
 
-.composer textarea:focus-visible {
+.inline-composer textarea:focus-visible {
   outline: 0;
 }
 
-.composer textarea::placeholder {
+.inline-composer textarea::placeholder {
   color: #aaa9af;
 }
 
-.composer textarea:disabled {
+.inline-composer textarea:disabled {
   cursor: not-allowed;
   opacity: 0.65;
 }
 
-.composer-footer {
+.inline-composer-footer {
   display: flex;
   min-height: 27px;
   align-items: center;
@@ -1910,23 +1894,9 @@ html[data-space-transitioning] .app-shell {
   gap: 10px;
 }
 
-.composer-hint {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.inline-composer-footer > span {
   color: #a1a1a7;
   font-size: 8px;
-}
-
-.composer-private-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #89aa91;
-}
-
-.hint-divider {
-  color: #c2c1c5;
 }
 
 .send-button {
@@ -1971,14 +1941,6 @@ html[data-space-transitioning] .app-shell {
   stroke-width: 2;
 }
 
-.thread-footnote {
-  margin: 9px 2px 0;
-  color: #a1a1a6;
-  font-size: 8px;
-  line-height: 1.5;
-  text-align: center;
-}
-
 .sr-only {
   position: absolute !important;
   width: 1px !important;
@@ -2009,18 +1971,6 @@ html[data-space-transitioning] .app-shell {
   50% {
     opacity: 1;
     transform: scale(1);
-  }
-}
-
-@keyframes message-arrive {
-  from {
-    opacity: 0;
-    transform: translateY(5px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
   }
 }
 
