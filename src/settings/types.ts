@@ -2,9 +2,13 @@ export type ReadingWidth = "comfortable" | "wide";
 
 export type ApiKeySource = "none" | "saved" | "environment";
 
-export type SettingsGroupId = "agent" | "reading";
+export type SettingsGroupId = "profile" | "agent" | "reading";
 
 export type PublicSettings = {
+  profile: {
+    displayName: string;
+    avatarDataUrl: string | null;
+  };
   agent: {
     apiKeySource: ApiKeySource;
     baseUrl: string;
@@ -16,6 +20,9 @@ export type PublicSettings = {
 };
 
 export type SaveSettingsInput = {
+  displayName?: string;
+  avatarDataUrl?: string;
+  clearAvatar?: boolean;
   apiKey?: string;
   clearApiKey?: boolean;
   baseUrl?: string;
@@ -27,4 +34,6 @@ export type SettingsChanged = {
   readingWidth: ReadingWidth;
   agentChanged: boolean;
   agentConfigured: boolean;
+  displayName: string;
+  profileChanged: boolean;
 };

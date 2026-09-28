@@ -13,8 +13,10 @@ use tauri_plugin_shell::{
 use uuid::Uuid;
 
 use settings::{
-    apply_save, load_stored_settings, public_settings, resolve_settings, write_stored_settings,
-    EnvSnapshot, PublicSettings, ResolvedSettings, SaveSettingsInput, SettingsChanged,
+    apply_save, avatar_data_url_for_save, decode_png_data_url, load_avatar_data_url,
+    load_stored_settings, profile_changed, public_settings, remove_avatar, resolve_settings,
+    write_avatar, write_stored_settings, EnvSnapshot, PublicSettings, ResolvedSettings,
+    SaveSettingsInput, SettingsChanged,
 };
 
 const SETTINGS_WINDOW_LABEL: &str = "settings";
@@ -253,7 +255,13 @@ async fn get_backend_connection(
 
 #[tauri::command]
 fn get_settings(app: AppHandle) -> Result<PublicSettings, String> {
-    Ok(public_settings(&resolve_from_app(&app)))
+    let resolved = resolve_from_app(&app);
+    let avatar = app
+        .path()
+        .app_config_dir()
+        .ok()
+        .and_then(|dir| load_avatar_data_url(&dir));
+    Ok(public_settings(&resolved, avatar))
 }
 
 #[tauri::command]
@@ -266,6 +274,15 @@ fn save_settings(app: AppHandle, input: SaveSettingsInput) -> Result<PublicSetti
     let env = EnvSnapshot::from_process();
     let before = resolve_settings(&stored, &env);
     apply_save(&mut stored, &input)?;
+    if let Some(data_url) = input
+        .avatar_data_url
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        write_avatar(&config_dir, &decode_png_data_url(data_url)?)?;
+    } else if input.clear_avatar == Some(true) {
+        remove_avatar(&config_dir)?;
+    }
     write_stored_settings(&config_dir, &stored)?;
     let after = resolve_settings(&stored, &env);
     let agent_changed = before.api_key != after.api_key
@@ -274,16 +291,22 @@ fn save_settings(app: AppHandle, input: SaveSettingsInput) -> Result<PublicSetti
     if agent_changed {
         start_sidecar(app.clone());
     }
+    let profile_did_change = profile_changed(&before, &after, &input);
     app.emit(
         "settings-changed",
         SettingsChanged {
             reading_width: after.reading_width,
             agent_changed,
             agent_configured: after.api_key.is_some(),
+            display_name: after.display_name.clone(),
+            profile_changed: profile_did_change,
         },
     )
     .map_err(|error| error.to_string())?;
-    Ok(public_settings(&after))
+    Ok(public_settings(
+        &after,
+        avatar_data_url_for_save(&config_dir, profile_did_change),
+    ))
 }
 
 #[tauri::command]

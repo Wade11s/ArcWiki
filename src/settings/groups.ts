@@ -8,6 +8,11 @@ export type SettingsGroup = {
 
 export const SETTINGS_GROUPS: readonly SettingsGroup[] = [
   {
+    id: "profile",
+    title: "Profile",
+    description: "How you appear in Agent Threads.",
+  },
+  {
     id: "agent",
     title: "Agent",
     description: "Model provider used by Agent Threads.",

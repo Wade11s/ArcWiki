@@ -12,6 +12,7 @@ import {
   Send,
   Settings,
   Sparkles,
+  User,
   X,
 } from "lucide-react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
@@ -42,6 +43,7 @@ import {
   saveSettings,
   subscribeSettingsChanged,
 } from "./settings/bridge";
+import { threadDisplayName } from "./settings/form";
 import type { ReadingWidth } from "./settings/types";
 import { openSettings } from "./settings/window";
 import { listenForSpaceGestures } from "./spaceGesture";
@@ -423,6 +425,8 @@ function App() {
     phase: "entering" | "settling";
   } | null>(null);
   const [readingWidth, setReadingWidth] = useState<ReadingWidth>("comfortable");
+  const [displayName, setDisplayName] = useState("");
+  const [avatarDataUrl, setAvatarDataUrl] = useState<string | null>(null);
   const [isEditingNote, setIsEditingNote] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
   const sidebarRef = useRef<HTMLElement | null>(null);
@@ -456,6 +460,7 @@ function App() {
     : [];
   const draft = activeTab ? (workspace.drafts[activeTab.id] ?? "") : "";
   const isReady = agentStatus.state === "ready";
+  const profileName = threadDisplayName(displayName);
 
   const updateDraft = useCallback((tabId: string, value: string) => {
     setWorkspace((current) => ({
@@ -583,7 +588,10 @@ function App() {
     let cancelled = false;
     void loadPublicSettings()
       .then((settings) => {
-        if (!cancelled) setReadingWidth(settings.reading.width);
+        if (cancelled) return;
+        setReadingWidth(settings.reading.width);
+        setDisplayName(settings.profile.displayName);
+        setAvatarDataUrl(settings.profile.avatarDataUrl);
       })
       .catch(() => {
         // Keep the in-memory default when settings cannot be read.
@@ -594,10 +602,25 @@ function App() {
   }, []);
 
   useEffect(() => {
-    return subscribeSettingsChanged((payload) => {
+    let cancelled = false;
+    const unsubscribe = subscribeSettingsChanged((payload) => {
       setReadingWidth(payload.readingWidth);
+      setDisplayName(payload.displayName);
+      if (payload.profileChanged) {
+        void loadPublicSettings()
+          .then((settings) => {
+            if (!cancelled) setAvatarDataUrl(settings.profile.avatarDataUrl);
+          })
+          .catch(() => {
+            // Keep the current avatar when a later fetch fails.
+          });
+      }
       if (payload.agentChanged) void checkBackend();
     });
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, [checkBackend]);
 
   useEffect(() => {
@@ -1460,14 +1483,14 @@ function App() {
                     className={`message-row ${message.role === "user" ? "from-user" : "from-agent"}`}
                     key={message.id}
                   >
-                    {message.role === "assistant" && (
-                      <div className="message-avatar" aria-hidden="true">
-                        <Sparkles />
-                      </div>
+                    {message.role === "assistant" ? (
+                      <ThreadAvatar kind="agent" />
+                    ) : (
+                      <ThreadAvatar kind="user" src={avatarDataUrl} />
                     )}
                     <div className="message-body">
                       <div className="message-author">
-                        <strong>{message.role === "user" ? "You" : "ArcWiki agent"}</strong>
+                        <strong>{message.role === "user" ? profileName : "ArcWiki agent"}</strong>
                         <time dateTime={new Date(message.createdAt).toISOString()}>
                           {formatDate(message.createdAt)}
                         </time>
@@ -1492,9 +1515,7 @@ function App() {
 
                 {currentProgress && (
                   <div className="message-row from-agent" role="status">
-                    <div className="message-avatar agent-avatar" aria-hidden="true">
-                      <Sparkles />
-                    </div>
+                    <ThreadAvatar kind="agent" />
                     <div className="message-body">
                       <div className="message-author">
                         <strong>ArcWiki agent</strong>
@@ -1530,9 +1551,10 @@ function App() {
                   </div>
                 )}
                 <div className="message-row from-user is-draft">
+                  <ThreadAvatar kind="user" src={avatarDataUrl} />
                   <div className="message-body">
                     <div className="message-author">
-                      <strong>You</strong>
+                      <strong>{profileName}</strong>
                     </div>
                     <form className="message-bubble inline-composer" onSubmit={submitMessage}>
                       <label className="sr-only" htmlFor="agent-message">
@@ -1654,6 +1676,29 @@ function App() {
         onChange={handleImportSelection}
       />
     </main>
+  );
+}
+
+function ThreadAvatar({
+  kind,
+  src,
+}: {
+  kind: "user" | "agent";
+  src?: string | null;
+}) {
+  return (
+    <div
+      className={`message-avatar ${kind === "user" ? "is-user" : "is-agent"}`}
+      aria-hidden="true"
+    >
+      {kind === "user" && src ? (
+        <img src={src} alt="" draggable={false} />
+      ) : kind === "user" ? (
+        <User />
+      ) : (
+        <Sparkles />
+      )}
+    </div>
   );
 }
 

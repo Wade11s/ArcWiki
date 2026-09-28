@@ -74,7 +74,11 @@ describe("ArcWiki desktop Agent Thread", () => {
     await expect($(".message-row.from-agent .message-bubble")).toHaveText(
       "E2E reply 1: Keyboard shortcut E2E",
     );
-    await expect($(".message-row.from-user .message-avatar")).not.toExist();
+    await expect($(".message-row.from-user:not(.is-draft) .message-avatar")).toExist();
+    await expect($(".message-row.is-draft .message-avatar")).toExist();
+    const userAvatar = await $(".message-row.from-user:not(.is-draft) .message-avatar").getLocation();
+    const agentAvatar = await $(".message-row.from-agent .message-avatar").getLocation();
+    expect(Math.abs(userAvatar.x - agentAvatar.x)).toBeLessThan(2);
     const user = await $(".message-row.from-user:not(.is-draft) .message-bubble").getLocation();
     const agent = await $(".message-row.from-agent .message-bubble").getLocation();
     expect(Math.abs(user.x - agent.x)).toBeLessThan(2);

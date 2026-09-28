@@ -1,15 +1,26 @@
-import { BookOpen, Sparkles } from "lucide-react";
+import { BookOpen, Sparkles, User } from "lucide-react";
 import { isTauri } from "@tauri-apps/api/core";
-import { useEffect, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type FormEvent,
+} from "react";
+import { AVATAR_ACCEPT, prepareAvatarFile } from "./avatar";
 import {
   loadPublicSettings,
   saveSettings,
   subscribeSettingsChanged,
 } from "./bridge";
 import {
+  FALLBACK_DISPLAY_NAME,
+  MAX_DISPLAY_NAME_CHARS,
   normalizeApiKey,
   normalizeBaseUrl,
+  normalizeDisplayName,
   normalizeModel,
+  retainedAvatarDataUrl,
 } from "./form";
 import { SETTINGS_GROUPS } from "./groups";
 import type {
@@ -18,6 +29,8 @@ import type {
   ReadingWidth,
   SettingsGroupId,
 } from "./types";
+
+type AvatarAction = "keep" | "replace" | "clear";
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -49,7 +62,12 @@ function keyHint(source: ApiKeySource, clearing: boolean): string {
 
 export function SettingsApp() {
   const desktop = isTauri();
-  const [group, setGroup] = useState<SettingsGroupId>("agent");
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const [group, setGroup] = useState<SettingsGroupId>("profile");
+  const [displayName, setDisplayName] = useState("");
+  const [avatarDataUrl, setAvatarDataUrl] = useState<string | null>(null);
+  const [pendingAvatar, setPendingAvatar] = useState<string | null>(null);
+  const [avatarAction, setAvatarAction] = useState<AvatarAction>("keep");
   const [apiKey, setApiKey] = useState("");
   const [clearKey, setClearKey] = useState(false);
   const [baseUrl, setBaseUrl] = useState("");
@@ -60,7 +78,19 @@ export function SettingsApp() {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const applyPublic = (settings: PublicSettings) => {
+  const applyPublic = (settings: PublicSettings, preserveProfileDraft = false) => {
+    if (!preserveProfileDraft) {
+      setDisplayName(settings.profile.displayName);
+      setAvatarDataUrl(
+        retainedAvatarDataUrl(
+          settings.profile.avatarDataUrl,
+          avatarDataUrl,
+          avatarAction === "clear",
+        ),
+      );
+      setPendingAvatar(null);
+      setAvatarAction("keep");
+    }
     setSource(settings.agent.apiKeySource);
     setBaseUrl(settings.agent.baseUrl);
     setModel(settings.agent.model);
@@ -103,7 +133,7 @@ export function SettingsApp() {
         baseUrl: normalizeBaseUrl(baseUrl),
         model: normalizeModel(model),
       });
-      applyPublic(saved);
+      applyPublic(saved, true);
       setStatus(
         saved.agent.apiKeySource === "none"
           ? "Agent settings saved. Add a key to enable threads."
@@ -113,6 +143,42 @@ export function SettingsApp() {
       setError(errorMessage(saveError));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const saveProfile = async (event: FormEvent) => {
+    event.preventDefault();
+    setSaving(true);
+    setError("");
+    setStatus("");
+    try {
+      const saved = await saveSettings({
+        displayName: normalizeDisplayName(displayName),
+        avatarDataUrl:
+          avatarAction === "replace" ? pendingAvatar ?? undefined : undefined,
+        clearAvatar: avatarAction === "clear" || undefined,
+      });
+      applyPublic(saved);
+      setStatus("Profile saved.");
+    } catch (saveError) {
+      setError(errorMessage(saveError));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const onPickAvatar = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setError("");
+    setStatus("");
+    try {
+      const dataUrl = await prepareAvatarFile(file);
+      setPendingAvatar(dataUrl);
+      setAvatarAction("replace");
+    } catch (pickError) {
+      setError(errorMessage(pickError));
     }
   };
 
@@ -126,6 +192,13 @@ export function SettingsApp() {
       setError(errorMessage(saveError));
     }
   };
+
+  const shownAvatar =
+    avatarAction === "clear"
+      ? null
+      : avatarAction === "replace"
+        ? pendingAvatar
+        : avatarDataUrl;
 
   const active = SETTINGS_GROUPS.find((item) => item.id === group) ?? SETTINGS_GROUPS[0];
 
@@ -150,7 +223,13 @@ export function SettingsApp() {
               }}
             >
               <span className="settings-nav-icon" aria-hidden="true">
-                {item.id === "agent" ? <Sparkles /> : <BookOpen />}
+                {item.id === "profile" ? (
+                  <User />
+                ) : item.id === "agent" ? (
+                  <Sparkles />
+                ) : (
+                  <BookOpen />
+                )}
               </span>
               <span>
                 <strong>{item.title}</strong>
@@ -166,12 +245,76 @@ export function SettingsApp() {
             <p>{active.description}</p>
           </div>
 
-          {group === "agent" ? (
+          {group === "profile" ? (
+            <form className="settings-form" onSubmit={(event) => void saveProfile(event)}>
+              <div className="settings-avatar-row">
+                <div className="settings-avatar-preview" aria-hidden="true">
+                  {shownAvatar ? (
+                    <img src={shownAvatar} alt="" draggable={false} />
+                  ) : (
+                    <User />
+                  )}
+                </div>
+                <div className="settings-avatar-actions">
+                  <button
+                    type="button"
+                    className="settings-secondary-button"
+                    disabled={saving}
+                    onClick={() => avatarInputRef.current?.click()}
+                  >
+                    Choose photo
+                  </button>
+                  {shownAvatar && (
+                    <button
+                      type="button"
+                      className="settings-text-button"
+                      disabled={saving}
+                      onClick={() => {
+                        setPendingAvatar(null);
+                        setAvatarAction("clear");
+                      }}
+                    >
+                      Remove photo
+                    </button>
+                  )}
+                  <small>PNG, JPEG, WebP, or GIF. The photo stays on this device.</small>
+                </div>
+                <input
+                  ref={avatarInputRef}
+                  className="sr-only"
+                  type="file"
+                  accept={AVATAR_ACCEPT}
+                  aria-label="Choose a profile photo"
+                  onChange={(event) => void onPickAvatar(event)}
+                />
+              </div>
+              <label className="settings-field">
+                <span>Display name</span>
+                <input
+                  type="text"
+                  name="profile-display-name"
+                  autoComplete="nickname"
+                  spellCheck={false}
+                  maxLength={MAX_DISPLAY_NAME_CHARS}
+                  placeholder={FALLBACK_DISPLAY_NAME}
+                  value={displayName}
+                  disabled={saving}
+                  onChange={(event) => setDisplayName(event.target.value)}
+                />
+                <small>Shown next to your messages in Agent Threads.</small>
+              </label>
+              <div className="settings-actions">
+                <button type="submit" className="settings-save" disabled={saving}>
+                  {saving ? "Saving…" : "Save Profile"}
+                </button>
+              </div>
+            </form>
+          ) : group === "agent" ? (
             <form className="settings-form" onSubmit={(event) => void saveAgent(event)}>
               {!desktop && (
                 <p className="settings-banner" role="status">
                   Agent keys, model, and API URL are saved in the ArcWiki desktop app.
-                  This preview can still change reading width.
+                  This preview can still change Profile and reading width.
                 </p>
               )}
               <label className="settings-field">

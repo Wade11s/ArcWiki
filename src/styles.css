@@ -1613,6 +1613,7 @@ html[data-space-transitioning] .app-shell {
   height: 27px;
   flex: 0 0 27px;
   place-items: center;
+  overflow: hidden;
   margin-top: 1px;
   border: 1px solid rgba(112, 151, 133, 0.17);
   border-radius: 9px;
@@ -1620,10 +1621,22 @@ html[data-space-transitioning] .app-shell {
   color: #759280;
 }
 
+.message-avatar.is-user {
+  background: color-mix(in srgb, var(--space-tint) 55%, white);
+  color: color-mix(in srgb, var(--space-accent) 70%, #666);
+}
+
 .message-avatar svg {
   width: 14px;
   height: 14px;
   stroke-width: 1.7;
+}
+
+.message-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
 }
 
 .message-body {
@@ -1680,7 +1693,6 @@ html[data-space-transitioning] .app-shell {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  padding-left: 38px;
 }
 
 .from-user .message-author {
@@ -2535,4 +2547,67 @@ html[data-window="settings"] #root {
 
 .settings-status.is-error {
   color: #9b5b4a;
+}
+
+.settings-avatar-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.settings-avatar-preview {
+  display: grid;
+  width: 72px;
+  height: 72px;
+  flex: 0 0 72px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(79, 77, 81, 0.12);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.78);
+  color: #7a7a82;
+}
+
+.settings-avatar-preview svg {
+  width: 28px;
+  height: 28px;
+  stroke-width: 1.6;
+}
+
+.settings-avatar-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.settings-avatar-actions {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.settings-avatar-actions small {
+  color: #8d8c93;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.settings-secondary-button {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid rgba(79, 77, 81, 0.14);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.78);
+  color: #303039;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-secondary-button:disabled {
+  color: #8d8c93;
+  cursor: not-allowed;
 }

@@ -5,9 +5,47 @@ import {
 import type { ReadingWidth } from "./types";
 
 const FORBIDDEN_URL_CHARS = /[\s<>"\\{}|^`]/;
+export const MAX_DISPLAY_NAME_CHARS = 40;
+export const FALLBACK_DISPLAY_NAME = "You";
 
 export function parseReadingWidth(value: unknown): ReadingWidth {
   return value === "wide" ? "wide" : "comfortable";
+}
+
+export function normalizeDisplayName(raw: string): string {
+  const collapsed = raw.trim().replace(/\s+/g, " ");
+  if ([...collapsed].some((char) => char.charCodeAt(0) < 32)) {
+    throw new Error("Display name contains invalid characters.");
+  }
+  if ([...collapsed].length > MAX_DISPLAY_NAME_CHARS) {
+    throw new Error("Display name is too long.");
+  }
+  return collapsed;
+}
+
+export function parseDisplayName(value: unknown): string {
+  if (typeof value !== "string") return "";
+  try {
+    return normalizeDisplayName(value);
+  } catch {
+    const collapsed = value.trim().replace(/\s+/g, " ");
+    if ([...collapsed].some((char) => char.charCodeAt(0) < 32)) return "";
+    return [...collapsed].slice(0, MAX_DISPLAY_NAME_CHARS).join("");
+  }
+}
+
+export function threadDisplayName(name: string): string {
+  return name.trim() || FALLBACK_DISPLAY_NAME;
+}
+
+export function retainedAvatarDataUrl(
+  returned: string | null,
+  current: string | null,
+  photoCleared: boolean,
+): string | null {
+  if (returned !== null) return returned;
+  if (photoCleared) return null;
+  return current;
 }
 
 export function normalizeBaseUrl(raw: string): string {

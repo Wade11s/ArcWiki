@@ -24,7 +24,7 @@ bun run test:e2e        # 构建隔离的测试版 Tauri 应用，运行桌面 E
 bun --env-file=.env.local run test:e2e:live  # 显式调用真实 OpenRouter 模型
 ```
 
-Agent 的 API 密钥、模型与 API 地址在独立的 **Settings** 窗口中配置（菜单 ArcWiki → Settings，或 `⌘ ,` / `Ctrl+,`）。密钥保存在本机应用配置目录，由 Tauri 写入 sidecar 进程的 `OPENROUTER_API_KEY`；前端不会读回已保存的密钥。若 Settings 里还没有密钥，启动环境中的 `OPENROUTER_API_KEY`、`OPENROUTER_BASE_URL` 和 `OPENROUTER_MODEL` 仍可作为开发回退（空白值按默认处理）。默认 API 地址是 `https://openrouter.ai/api/v1`，模型是 `stealth/space-bunny-alpha`。Bun 会自动加载仓库根目录的 `.env.local`，因此本地测试凭据可以只放在该文件（已被 `.gitignore` 排除）。不要使用 `VITE_` 环境变量传递密钥，否则 Vite 会将它嵌入前端资源。双击安装包不会继承开发终端的环境变量，请在 Settings 中保存密钥。
+显示名、头像、Agent 的 API 密钥、模型与 API 地址在独立的 **Settings** 窗口中配置（菜单 ArcWiki → Settings，或 `⌘ ,` / `Ctrl+,`）。头像会重编码为本机 PNG，只用于界面；密钥保存在本机应用配置目录，由 Tauri 写入 sidecar 进程的 `OPENROUTER_API_KEY`；前端不会读回已保存的密钥。若 Settings 里还没有密钥，启动环境中的 `OPENROUTER_API_KEY`、`OPENROUTER_BASE_URL` 和 `OPENROUTER_MODEL` 仍可作为开发回退（空白值按默认处理）。默认 API 地址是 `https://openrouter.ai/api/v1`，模型是 `stealth/space-bunny-alpha`。Bun 会自动加载仓库根目录的 `.env.local`，因此本地测试凭据可以只放在该文件（已被 `.gitignore` 排除）。不要使用 `VITE_` 环境变量传递密钥，否则 Vite 会将它嵌入前端资源。双击安装包不会继承开发终端的环境变量，请在 Settings 中保存密钥。
 
 `test:e2e` 需要 Node.js 18.20+、Bun 和 Tauri 构建依赖。它使用 WebdriverIO + Tauri Service 的嵌入式 WebDriver 驱动真实桌面窗口；脚本启动仅监听 `127.0.0.1` 的模拟 OpenRouter 接口，并覆盖运行环境中的 API Key 为测试假值，不调用真实模型。测试版通过独立的 `com.wade11s.arcwiki.e2e` 标识隔离本地数据（macOS 会生成独立的 `ArcWiki E2E.app`；Linux/Windows 会将 sidecar 放在未打包的测试可执行文件旁）；测试结束会停止模拟服务。正常 `desktop:build` 不包含 WebDriver 插件。Linux 无桌面会话时可用 `xvfb-run bun run test:e2e`。目前已在 macOS 实机验证，Linux/Windows 尚未实机运行。
 
@@ -34,7 +34,7 @@ Agent 的 API 密钥、模型与 API 地址在独立的 **Settings** 窗口中�
 
 - 在侧边栏底部点击彩色圆点选择 Space，侧边栏中选择 Tab；仅在**左侧侧边栏**用触控板横向双指滑动切换 Space，右侧内容区域的横向滑动不会切换，纵向滚动仍用于阅读文档。
 - Markdown 标签页可阅读内置示例，或从本机导入 `.md` 文件；文件内容只进入应用本地状态，不会发给 Agent，除非用户主动复制并发送。
-- Agent Thread 的输入框是对话末尾的用户气泡；Enter 换行，macOS 用 Command+Enter 发送，Windows/Linux 用 Control+Enter 发送。每个 Thread 的未发送草稿独立保留，回复失败或中断后可以重试该条消息，不会重复插入用户消息。Space、Tab、草稿和对话在本机 WebView 的 localStorage 中保留；清理站点数据会清空它们。
+- Agent Thread 的输入框是对话末尾的用户气泡；Enter 换行，macOS 用 Command+Enter 发送，Windows/Linux 用 Control+Enter 发送。用户消息与 Agent 消息共用左侧头像列：没有自定义照片时显示占位图标。每个 Thread 的未发送草稿独立保留，回复失败或中断后可以重试该条消息，不会重复插入用户消息。Space、Tab、草稿和对话在本机 WebView 的 localStorage 中保留；清理站点数据会清空它们。Profile 显示名和头像保存在 Settings 里，桌面应用写入本机配置目录。
 - 历史记录完整保留在本机，向模型发送时只选取符合 sidecar 条数与请求大小限制的最近上下文；超过长度限制的单条输入无法发送。
 - 没有设置密钥时仍能浏览文档；Agent Thread 会提示打开 Settings。阅读宽度可在主窗口切换，也会写入 Settings。
 
