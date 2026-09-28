@@ -47,6 +47,8 @@ import { threadDisplayName } from "./settings/form";
 import type { ReadingWidth } from "./settings/types";
 import { openSettings } from "./settings/window";
 import { listenForSpaceGestures } from "./spaceGesture";
+import { WikiPanel } from "./WikiPanel";
+import { wikiRequest, type WikiQueryResult, type WikiSpace } from "./wikiClient";
 
 type Space = {
   id: string;
@@ -71,6 +73,7 @@ type ChatMessage = {
   role: "user" | "assistant";
   content: string;
   createdAt: number;
+  evidence?: WikiQueryResult[];
 };
 
 type Workspace = {
@@ -87,7 +90,7 @@ type Workspace = {
 type AgentStatus =
   | { state: "checking" }
   | { state: "unavailable"; message: string }
-  | { state: "unconfigured"; message: string }
+  | { state: "unconfigured"; message: string; port: number; token: string }
   | { state: "error"; message: string }
   | { state: "ready"; port: number; token: string };
 
@@ -172,6 +175,20 @@ function makeId(prefix: string) {
       ? crypto.randomUUID()
       : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   return `${prefix}-${id}`;
+}
+
+function evidenceItems(value: unknown): WikiQueryResult[] {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, 10).filter((item): item is WikiQueryResult =>
+    Boolean(item) &&
+    typeof item === "object" &&
+    (item.kind === "page" || item.kind === "source") &&
+    typeof item.id === "string" &&
+    typeof item.title === "string" &&
+    typeof item.snippet === "string" &&
+    typeof item.citation === "string" &&
+    item.citation === `${item.kind}:${item.id}`,
+  );
 }
 
 function createDefaultWorkspace(): Workspace {
@@ -303,7 +320,15 @@ function loadWorkspace(): Workspace {
             "createdAt" in message &&
             typeof message.createdAt === "number" &&
             Number.isFinite(message.createdAt),
-        );
+        ).map((message) => ({
+          id: message.id,
+          role: message.role,
+          content: message.content,
+          createdAt: message.createdAt,
+          ...(Array.isArray(message.evidence)
+            ? { evidence: evidenceItems(message.evidence) }
+            : {}),
+        }));
       }
     }
 
@@ -391,7 +416,7 @@ const markdownComponents = { a: SafeMarkdownLink };
 
 // History stays local; send only the recent context that fits the sidecar's
 // message and byte limits, beginning at a user turn.
-function modelContext(messages: ChatMessage[]) {
+function modelContext(messages: ChatMessage[], spaceId: string, threadId: string) {
   let context: Pick<ChatMessage, "role" | "content">[] = [];
   const encoder = new TextEncoder();
   for (let i = messages.length - 1; i >= 0 && context.length < MAX_MESSAGES; i--) {
@@ -400,7 +425,7 @@ function modelContext(messages: ChatMessage[]) {
     // Stop at an invalid turn rather than making every future send fail.
     if (content.length > MAX_CONTENT_CHARS) break;
     const candidate = [{ role, content }, ...context];
-    if (encoder.encode(JSON.stringify({ messages: candidate })).byteLength > MAX_BODY_BYTES) {
+    if (encoder.encode(JSON.stringify({ messages: candidate, spaceId, threadId })).byteLength > MAX_BODY_BYTES) {
       break;
     }
     context = candidate;
@@ -428,6 +453,8 @@ function App() {
   const [displayName, setDisplayName] = useState("");
   const [avatarDataUrl, setAvatarDataUrl] = useState<string | null>(null);
   const [isEditingNote, setIsEditingNote] = useState(false);
+  const [wikiOpen, setWikiOpen] = useState(false);
+  const [wikiReady, setWikiReady] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
   const sidebarRef = useRef<HTMLElement | null>(null);
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
@@ -459,8 +486,17 @@ function App() {
     ? (workspace.conversations[activeTab.id] ?? [])
     : [];
   const draft = activeTab ? (workspace.drafts[activeTab.id] ?? "") : "";
-  const isReady = agentStatus.state === "ready";
+  const wikiConnection =
+    agentStatus.state === "ready" || agentStatus.state === "unconfigured"
+      ? { port: agentStatus.port, token: agentStatus.token }
+      : undefined;
+  const isReady = agentStatus.state === "ready" && wikiReady;
   const profileName = threadDisplayName(displayName);
+  const threadBindings = workspace.tabs
+    .filter((tab) => tab.kind === "thread")
+    .map((tab) => `${tab.id}:${tab.spaceId}`)
+    .sort()
+    .join("\n");
 
   const updateDraft = useCallback((tabId: string, value: string) => {
     setWorkspace((current) => ({
@@ -479,9 +515,9 @@ function App() {
   useLayoutEffect(() => {
     const scroll = contentScrollRef.current;
     if (!scroll) return;
-    scroll.scrollTop = activeTab?.kind === "thread" ? scroll.scrollHeight : 0;
+    scroll.scrollTop = !wikiOpen && activeTab?.kind === "thread" ? scroll.scrollHeight : 0;
     shouldFollowThread.current = true;
-  }, [activeTab?.id]);
+  }, [activeTab?.id, wikiOpen]);
 
   useLayoutEffect(() => {
     if (!activeTab || activeTab.kind !== "thread") return;
@@ -561,6 +597,8 @@ function App() {
           state: "unconfigured",
           message:
             "Add an OpenRouter API key in Settings, then try again.",
+          port: connection.port,
+          token: connection.token,
         });
         return;
       }
@@ -630,6 +668,81 @@ function App() {
     };
   }, [checkBackend]);
 
+  useEffect(() => {
+    if (!wikiConnection) {
+      setWikiReady(false);
+      return;
+    }
+    let active = true;
+    setWikiReady(false);
+    void (async () => {
+      await Promise.all(workspace.spaces.map((space) =>
+        wikiRequest(wikiConnection, "/api/wiki/spaces/ensure", "POST", {
+          id: space.id, name: space.name, purpose: space.subtitle,
+        }),
+      ));
+      const { spaces: storedSpaces } = await wikiRequest<{ spaces: WikiSpace[] }>(
+        wikiConnection, "/api/wiki/spaces",
+      );
+      if (!active) return;
+      if (storedSpaces.some((space) => !workspace.spaces.some((existing) => existing.id === space.id))) {
+        // Restoring a WebView's localStorage must not orphan file-backed Wiki
+        // Spaces. Recreate only their navigation/Thread shells; old notes stay
+        // out of the Wiki until the user explicitly migrates them.
+        setWorkspace((current) => {
+          const missing = storedSpaces.filter((space) =>
+            !current.spaces.some((existing) => existing.id === space.id),
+          );
+          if (!missing.length) return current;
+          const recoveredThreads: NoteTab[] = missing.map((space) => ({
+            id: makeId("thread"),
+            spaceId: space.id,
+            title: "Agent thread",
+            kind: "thread",
+          }));
+          return {
+            ...current,
+            spaces: [
+              ...current.spaces,
+              ...missing.map((space, index) => {
+                const accent = DEFAULT_SPACES[(current.spaces.length + index) % DEFAULT_SPACES.length];
+                return {
+                  id: space.id,
+                  name: space.name,
+                  subtitle: space.purpose || "A knowledge range",
+                  color: accent.color,
+                  tint: accent.tint,
+                  icon: accent.icon,
+                };
+              }),
+            ],
+            tabs: [
+              ...current.tabs,
+              ...recoveredThreads,
+            ],
+            lastTabBySpace: {
+              ...current.lastTabBySpace,
+              ...Object.fromEntries(recoveredThreads.map((tab) => [tab.spaceId, tab.id])),
+            },
+          };
+        });
+        return;
+      }
+      await Promise.all(workspace.tabs
+        .filter((tab) => tab.kind === "thread")
+        .map((tab) => wikiRequest(wikiConnection, "/api/wiki/threads/bind", "POST", {
+          threadId: tab.id, spaceId: tab.spaceId,
+        })));
+      if (active) setWikiReady(true);
+    })().catch((error) => {
+      if (active) {
+        setWikiReady(false);
+        setNotice(error instanceof Error ? error.message : "Wiki setup failed.");
+      }
+    });
+    return () => { active = false; };
+  }, [wikiConnection?.port, wikiConnection?.token, workspace.spaces, threadBindings]);
+
   const animateSpaceTransition = useCallback((direction: number, update: () => void) => {
     const normalizedDirection: 1 | -1 = direction < 0 ? -1 : 1;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
@@ -694,6 +807,7 @@ function App() {
     setImportError("");
     setNotice("");
     setIsEditingNote(false);
+    setWikiOpen(false);
   }, []);
 
   const switchSpace = useCallback((spaceId: string) => {
@@ -761,9 +875,39 @@ function App() {
       setImportError("");
       setNotice("");
       setIsEditingNote(false);
+      setWikiOpen(false);
     },
     [workspace.activeSpaceId],
   );
+
+  const addWikiSpace = useCallback((space: WikiSpace) => {
+    const threadId = makeId("thread");
+    setWorkspace((current) => {
+      if (current.spaces.some((existing) => existing.id === space.id)) return current;
+      const accent = DEFAULT_SPACES[current.spaces.length % DEFAULT_SPACES.length];
+      return {
+        ...current,
+        spaces: [...current.spaces, {
+          id: space.id,
+          name: space.name,
+          subtitle: space.purpose || "A knowledge range",
+          color: accent.color,
+          tint: accent.tint,
+          icon: accent.icon,
+        }],
+        tabs: [...current.tabs, {
+          id: threadId,
+          spaceId: space.id,
+          title: "Agent thread",
+          kind: "thread",
+        }],
+        activeSpaceId: space.id,
+        activeTabId: threadId,
+        lastTabBySpace: { ...current.lastTabBySpace, [space.id]: threadId },
+      };
+    });
+    setWikiOpen(true);
+  }, []);
 
   const closeTab = useCallback((tabId: string) => {
     const tab = workspace.tabs.find((item) => item.id === tabId);
@@ -886,9 +1030,9 @@ function App() {
   );
 
   const sendThreadMessages = useCallback(
-    async (tabId: string, messages: ChatMessage[], connection: ReadyAgent) => {
+    async (tabId: string, spaceId: string, messages: ChatMessage[], connection: ReadyAgent) => {
       if (pendingRequests.current[tabId]) return;
-      const context = modelContext(messages);
+      const context = modelContext(messages, spaceId, tabId);
       const latest = context.at(-1);
       if (
         !latest ||
@@ -930,12 +1074,13 @@ function App() {
               "Content-Type": "application/json",
               Authorization: `Bearer ${connection.token}`,
             },
-            body: JSON.stringify({ messages: context }),
+            body: JSON.stringify({ messages: context, spaceId, threadId: tabId }),
             signal: controller.signal,
           },
         );
         const result = (await response.json()) as {
           text?: string;
+          evidence?: unknown;
           error?: string | { code?: string; message?: string };
         };
         const errorMessage =
@@ -956,6 +1101,7 @@ function App() {
           role: "assistant",
           content: result.text,
           createdAt: Date.now(),
+          evidence: evidenceItems(result.evidence),
         };
         if (controller.signal.aborted) return;
         setWorkspace((current) => {
@@ -1008,6 +1154,7 @@ function App() {
         !tab ||
         tab.kind !== "thread" ||
         !message ||
+        !wikiReady ||
         agentStatus.state !== "ready" ||
         pendingRequests.current[tab.id]
       ) {
@@ -1032,17 +1179,17 @@ function App() {
         },
         drafts: { ...current.drafts, [tab.id]: "" },
       }));
-      void sendThreadMessages(tab.id, requestMessages, agentStatus);
+      void sendThreadMessages(tab.id, tab.spaceId, requestMessages, agentStatus);
     },
-    [activeTab, agentStatus, draft, sendThreadMessages, workspace.conversations],
+    [activeTab, agentStatus, draft, sendThreadMessages, wikiReady, workspace.conversations],
   );
 
   const retryMessage = useCallback(() => {
-    if (!activeTab || agentStatus.state !== "ready") return;
+    if (!activeTab || !wikiReady || agentStatus.state !== "ready") return;
     const messages = workspace.conversations[activeTab.id] ?? [];
     if (messages.at(-1)?.role !== "user") return;
-    void sendThreadMessages(activeTab.id, messages, agentStatus);
-  }, [activeTab, agentStatus, sendThreadMessages, workspace.conversations]);
+    void sendThreadMessages(activeTab.id, activeTab.spaceId, messages, agentStatus);
+  }, [activeTab, agentStatus, sendThreadMessages, wikiReady, workspace.conversations]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1263,6 +1410,16 @@ function App() {
             <button
               className="side-action"
               type="button"
+              aria-pressed={wikiOpen}
+              onClick={() => setWikiOpen(true)}
+            >
+              <BookOpen aria-hidden="true" />
+              <span>Space Wiki</span>
+            </button>
+            <button
+              className="side-action"
+              type="button"
+              title="Import as a local note; use Space Wiki to add a Source"
               onClick={() => importInputRef.current?.click()}
             >
               <Plus aria-hidden="true" />
@@ -1318,7 +1475,7 @@ function App() {
             />
             <span className="breadcrumb-space">{activeSpace.name}</span>
             <span className="breadcrumb-slash">/</span>
-            <span className="breadcrumb-page">{activeTab.title}</span>
+            <span className="breadcrumb-page">{wikiOpen ? "Wiki" : activeTab.title}</span>
           </div>
           <div className="topbar-actions">
             <span className="save-status">
@@ -1387,7 +1544,7 @@ function App() {
           ref={contentScrollRef}
           className={`content-scroll${spaceTransition ? ` space-transition-${spaceTransition.phase}` : ""}`}
           onScroll={(event) => {
-            if (activeTab.kind !== "thread") return;
+            if (wikiOpen || activeTab.kind !== "thread") return;
             const scroll = event.currentTarget;
             shouldFollowThread.current =
               scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 96;
@@ -1417,7 +1574,15 @@ function App() {
             </div>
           )}
 
-          {activeTab.kind === "thread" ? (
+          {wikiOpen ? (
+            <WikiPanel
+              key={activeSpace.id}
+              connection={wikiConnection}
+              spaceId={activeSpace.id}
+              spaceName={activeSpace.name}
+              onSpaceCreated={addWikiSpace}
+            />
+          ) : activeTab.kind === "thread" ? (
             <section className="thread-page" aria-labelledby="thread-title">
               <div className="thread-header">
                 <div className="thread-kicker">
@@ -1433,6 +1598,9 @@ function App() {
                   A quiet place to think something through. Conversations stay
                   with this workspace.
                 </p>
+                {agentStatus.state === "ready" && !wikiReady && (
+                  <p role="status">Preparing this Space’s Wiki scope…</p>
+                )}
                 {agentStatus.state !== "ready" && (
                   <AgentAvailability
                     status={agentStatus}
@@ -1509,6 +1677,20 @@ function App() {
                           <p>{message.content}</p>
                         )}
                       </div>
+                      {message.role === "assistant" && message.evidence && (
+                        <details className="thread-evidence">
+                          <summary>
+                            {message.evidence.length
+                              ? `${message.evidence.length} items found in this Space`
+                              : "No matching Wiki evidence in this Space"}
+                          </summary>
+                          {message.evidence.map((item) => (
+                            <p key={item.citation}>
+                              <strong>{item.title}</strong> ({item.citation}) — {item.snippet}
+                            </p>
+                          ))}
+                        </details>
+                      )}
                     </div>
                   </article>
                 ))}

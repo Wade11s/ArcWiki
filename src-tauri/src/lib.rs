@@ -1,5 +1,6 @@
 mod settings;
 
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -68,7 +69,13 @@ fn resolve_from_app(app: &AppHandle) -> ResolvedSettings {
     resolve_settings(&stored, &EnvSnapshot::from_process())
 }
 
-fn start_sidecar(app: AppHandle) {
+fn wiki_data_dir(app: &AppHandle) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let dir = app.path().app_data_dir()?.join("wiki");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+fn start_sidecar(app: AppHandle, wiki_dir: &Path) {
     let token = format!("{}{}", Uuid::new_v4(), Uuid::new_v4());
     let generation = {
         let state = app.state::<BackendState>();
@@ -88,6 +95,7 @@ fn start_sidecar(app: AppHandle) {
             command
                 .env("ARCWIKI_PORT", "0")
                 .env("ARCWIKI_SESSION_TOKEN", &token)
+                .env("ARCWIKI_WIKI_DIR", wiki_dir)
                 .env(
                     "OPENROUTER_API_KEY",
                     resolved.api_key.clone().unwrap_or_default(),
@@ -289,7 +297,8 @@ fn save_settings(app: AppHandle, input: SaveSettingsInput) -> Result<PublicSetti
         || before.base_url != after.base_url
         || before.model != after.model;
     if agent_changed {
-        start_sidecar(app.clone());
+        let wiki_dir = wiki_data_dir(&app).map_err(|error| error.to_string())?;
+        start_sidecar(app.clone(), &wiki_dir);
     }
     let profile_did_change = profile_changed(&before, &after, &input);
     app.emit(
@@ -329,7 +338,8 @@ pub fn run() {
         ])
         .setup(|app| {
             install_menu(app)?;
-            start_sidecar(app.handle().clone());
+            let wiki_dir = wiki_data_dir(app.handle())?;
+            start_sidecar(app.handle().clone(), &wiki_dir);
             Ok(())
         })
         .build(tauri::generate_context!())

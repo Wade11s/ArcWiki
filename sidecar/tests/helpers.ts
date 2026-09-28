@@ -8,6 +8,7 @@ export type TestSidecar = SidecarHandle & { stdout: string };
 export async function startTestSidecar(options: {
   env?: Record<string, string | undefined>;
   responder?: ChatResponder;
+  tinyFishFetcher?: (url: string, init: RequestInit) => Promise<Response>;
 } = {}): Promise<TestSidecar> {
   let stdout = "";
   const handle = await startSidecar({
@@ -17,6 +18,7 @@ export async function startTestSidecar(options: {
       ...options.env,
     },
     responder: options.responder,
+    tinyFishFetcher: options.tinyFishFetcher,
     stdout: {
       write(chunk) {
         stdout += typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk);

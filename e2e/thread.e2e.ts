@@ -8,6 +8,7 @@ async function openThread() {
 
 async function send(message: string) {
   await $("#agent-message").setValue(message);
+  await expect($(".send-button")).toBeEnabled();
   await $(".send-button").click();
 }
 
@@ -59,6 +60,7 @@ describe("ArcWiki desktop Agent Thread", () => {
     await expect(input).toHaveValue("First line\nSecond line");
 
     await input.setValue("Keyboard shortcut E2E");
+    await expect($(".send-button")).toBeEnabled();
     await browser.execute(() => {
       const textarea = document.querySelector<HTMLTextAreaElement>("#agent-message")!;
       textarea.dispatchEvent(

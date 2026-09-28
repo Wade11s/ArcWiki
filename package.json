@@ -10,6 +10,7 @@
     "build:web": "tsc --noEmit && vite build",
     "build:sidecar": "bun scripts/build-sidecar.ts",
     "desktop:build": "bun run build:sidecar && tauri build",
+    "wiki": "bun sidecar/wiki-cli.ts",
     "test": "bun test sidecar src",
     "test:e2e": "bunx tsc --noEmit -p e2e/tsconfig.json && bun scripts/e2e.ts",
     "test:e2e:live": "bunx tsc --noEmit -p e2e/tsconfig.json && bun scripts/e2e.ts --live"

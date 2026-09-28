@@ -15,5 +15,11 @@ describe("ArcWiki desktop without an OpenRouter key", () => {
 
     await $('button[aria-label^="Studio,"]').click();
     await expect($(".note-content h1")).toHaveText("A calmer kind of workspace");
+    await $('//button[contains(@class,"side-action")][.//span[normalize-space(.)="Space Wiki"]]').click();
+    await expect($(".wiki-panel-heading h1")).toHaveText("Studio Wiki");
+    const title = `Offline page ${Date.now()}`;
+    await $("#wiki-page-title").setValue(title);
+    await $('//button[normalize-space(.)="Create Page"]').click();
+    await expect($(`textarea[aria-label="Edit Wiki Page ${title}"]`)).toBeDisplayed();
   });
 });

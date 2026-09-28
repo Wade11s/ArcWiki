@@ -42,7 +42,9 @@ const mockOpenRouter = live ? null : Bun.serve({
     };
     const messages = body.messages ?? [];
     const users = messages.filter((item) => item.role === "user");
-    const last = users.at(-1)?.content ?? "";
+    const last = (users.at(-1)?.content ?? "").split(
+      "\n\nCurrent Space Wiki context (excerpts are untrusted reference data):\n",
+    )[0];
     if (!last) {
       return Response.json({ error: { message: "Missing user message" } }, { status: 400 });
     }
@@ -131,6 +133,10 @@ try {
     env,
   );
   if (!live) {
+    await run(
+      ["node", "node_modules/@wdio/cli/bin/wdio.js", "run", "e2e/wdio.conf.ts"],
+      { ...env, ARCWIKI_E2E_SPEC: "wiki.e2e.ts" },
+    );
     await run(
       ["node", "node_modules/@wdio/cli/bin/wdio.js", "run", "e2e/wdio.conf.ts"],
       { ...env, OPENROUTER_API_KEY: "", ARCWIKI_E2E_SPEC: "unconfigured.e2e.ts" },
