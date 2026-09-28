@@ -1,10 +1,12 @@
-export { MAX_BODY_BYTES, MAX_MESSAGES, MAX_CONTENT_CHARS } from "../../shared/agentContract";
+export {
+  MAX_BODY_BYTES,
+  MAX_MESSAGES,
+  MAX_CONTENT_CHARS,
+  DEFAULT_OPENROUTER_BASE_URL,
+  DEFAULT_OPENROUTER_MODEL as OPENROUTER_MODEL,
+} from "../../shared/agentContract";
 
 export const LOOPBACK_HOST = "127.0.0.1";
-
-export const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
-
-export const OPENROUTER_MODEL = "stealth/space-bunny-alpha";
 
 export const ALLOWED_ORIGINS = [
   "tauri://localhost",

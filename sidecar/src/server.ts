@@ -169,7 +169,7 @@ async function handleChat(
     throw httpError(
       503,
       "not_configured",
-      "OpenRouter is not configured. Set OPENROUTER_API_KEY in the environment and restart the sidecar.",
+      "OpenRouter is not configured. Add an API key in Settings.",
     );
   }
   if (!contentTypeIsJson(req)) {
@@ -191,7 +191,7 @@ async function handleChat(
     throw httpError(
       503,
       "not_configured",
-      "OpenRouter is not configured. Set OPENROUTER_API_KEY in the environment and restart the sidecar.",
+      "OpenRouter is not configured. Add an API key in Settings.",
     );
   }
 

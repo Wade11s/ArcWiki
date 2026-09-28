@@ -4,8 +4,8 @@
 
 ## 改动边界
 
-- 界面、Space/Tab 状态与触控板手势在 `src/`；Agent HTTP 契约在 `sidecar/`；sidecar 的启动、端口与会话令牌在 `src-tauri/`。跨层改接口时同步检查调用方和测试。
-- 凭据只从 sidecar 进程的 `OPENROUTER_API_KEY` 环境变量读取。前端只接收临时的本机端口与会话令牌；保持 loopback 绑定、Bearer 校验和 Origin 限制。
+- 界面、Space/Tab 状态、触控板手势与 Settings 窗口在 `src/`；Agent HTTP 契约在 `sidecar/`；sidecar 的启动、端口、会话令牌与 Settings 持久化在 `src-tauri/`。跨层改接口时同步检查调用方和测试。
+- 凭据由 Tauri 写入 sidecar 进程的 `OPENROUTER_API_KEY`（来自 Settings 或尚未保存时的启动环境）。前端只接收临时的本机端口与会话令牌；Settings 窗口可通过 IPC 提交新密钥，但不会读回已保存的密钥。保持 loopback 绑定、Bearer 校验和 Origin 限制。
 - Markdown 是不可信输入：保留默认的 HTML 转义与安全链接处理。调整 Space 手势时，限制左侧侧边栏触发，保留纵向阅读滚动、每次手势至多切换一次、键盘操作和减少动画偏好。
 - 验证要覆盖实际改动路径：界面运行 `bun run build`，桌面 GUI 交互用 `cua-driver` 测试，操作前后获取窗口状态以确认结果；sidecar 运行 `bun run test`；改动 Tauri/打包时运行 `bun run desktop:build`。生成的可执行文件和 `target/` 不入库。
 

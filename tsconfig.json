@@ -15,5 +15,5 @@
     "noFallthroughCasesInSwitch": true,
     "types": ["vite/client", "bun"]
   },
-  "include": ["src", "vite.config.ts", "scripts", "sidecar"]
+  "include": ["src", "shared", "vite.config.ts", "scripts", "sidecar"]
 }

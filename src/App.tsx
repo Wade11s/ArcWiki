@@ -7,10 +7,10 @@ import {
   Headphones,
   LoaderCircle,
   MessageCircle,
-  MoreHorizontal,
   Plus,
   RefreshCw,
   Send,
+  Settings,
   Sparkles,
   X,
 } from "lucide-react";
@@ -37,6 +37,13 @@ import {
   studioMarkdown,
   welcomeMarkdown,
 } from "./content";
+import {
+  loadPublicSettings,
+  saveSettings,
+  subscribeSettingsChanged,
+} from "./settings/bridge";
+import type { ReadingWidth } from "./settings/types";
+import { openSettings } from "./settings/window";
 import { listenForSpaceGestures } from "./spaceGesture";
 
 type Space = {
@@ -415,9 +422,7 @@ function App() {
     direction: 1 | -1;
     phase: "entering" | "settling";
   } | null>(null);
-  const [readingWidth, setReadingWidth] = useState<"comfortable" | "wide">(
-    "comfortable",
-  );
+  const [readingWidth, setReadingWidth] = useState<ReadingWidth>("comfortable");
   const [isEditingNote, setIsEditingNote] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
   const sidebarRef = useRef<HTMLElement | null>(null);
@@ -550,7 +555,7 @@ function App() {
         setAgentStatus({
           state: "unconfigured",
           message:
-            "Set OPENROUTER_API_KEY in the app's launch environment, then restart ArcWiki.",
+            "Add an OpenRouter API key in Settings, then try again.",
         });
         return;
       }
@@ -573,6 +578,27 @@ function App() {
       });
     }
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadPublicSettings()
+      .then((settings) => {
+        if (!cancelled) setReadingWidth(settings.reading.width);
+      })
+      .catch(() => {
+        // Keep the in-memory default when settings cannot be read.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    return subscribeSettingsChanged((payload) => {
+      setReadingWidth(payload.readingWidth);
+      if (payload.agentChanged) void checkBackend();
+    });
+  }, [checkBackend]);
 
   useEffect(() => {
     void checkBackend();
@@ -1003,7 +1029,10 @@ function App() {
         target instanceof HTMLElement &&
         (target.isContentEditable ||
           target.matches("input, textarea, select"));
-      if (modifier && event.key.toLowerCase() === "o") {
+      if (modifier && event.key === ",") {
+        event.preventDefault();
+        void openSettings();
+      } else if (modifier && event.key.toLowerCase() === "o") {
         event.preventDefault();
         importInputRef.current?.click();
       } else if (
@@ -1127,11 +1156,11 @@ function App() {
             <button
               className="icon-button sidebar-more"
               type="button"
-              aria-label="Workspace options"
-              title="Workspace options"
-              onClick={() => setNotice("Your workspace is saved on this device.")}
+              aria-label="Settings"
+              title="Settings"
+              onClick={() => void openSettings()}
             >
-              <MoreHorizontal aria-hidden="true" />
+              <Settings aria-hidden="true" />
             </button>
           </div>
 
@@ -1298,15 +1327,24 @@ function App() {
               className="topbar-button reading-toggle"
               type="button"
               aria-pressed={readingWidth === "wide"}
-              onClick={() =>
-                setReadingWidth((width) =>
-                  width === "comfortable" ? "wide" : "comfortable",
-                )
-              }
+              onClick={() => {
+                const next = readingWidth === "comfortable" ? "wide" : "comfortable";
+                setReadingWidth(next);
+                void saveSettings({ readingWidth: next });
+              }}
               title={readingWidth === "wide" ? "Comfortable reading width" : "Wider reading width"}
             >
               <BookOpen aria-hidden="true" />
               <span>{readingWidth === "wide" ? "Wide view" : "Reading view"}</span>
+            </button>
+            <button
+              className="icon-button topbar-settings"
+              type="button"
+              aria-label="Settings"
+              title="Settings"
+              onClick={() => void openSettings()}
+            >
+              <Settings aria-hidden="true" />
             </button>
             <button
               className="icon-button topbar-help"
@@ -1376,6 +1414,7 @@ function App() {
                   <AgentAvailability
                     status={agentStatus}
                     onRetry={() => void checkBackend()}
+                    onOpenSettings={() => void openSettings()}
                   />
                 )}
               </div>
@@ -1621,9 +1660,11 @@ function App() {
 function AgentAvailability({
   status,
   onRetry,
+  onOpenSettings,
 }: {
   status: Exclude<AgentStatus, { state: "ready" }>;
   onRetry: () => void;
+  onOpenSettings: () => void;
 }) {
   if (status.state === "checking") {
     return (
@@ -1661,12 +1702,17 @@ function AgentAvailability({
         </strong>
         <span>{status.message}</span>
       </div>
-      {status.state !== "unavailable" && (
+      {status.state === "unconfigured" ? (
+        <button type="button" onClick={onOpenSettings} aria-label="Open Settings">
+          <Settings aria-hidden="true" />
+          <span>Open Settings</span>
+        </button>
+      ) : status.state !== "unavailable" ? (
         <button type="button" onClick={onRetry} aria-label="Retry agent connection">
           <RefreshCw aria-hidden="true" />
           <span>Retry</span>
         </button>
-      )}
+      ) : null}
     </div>
   );
 }

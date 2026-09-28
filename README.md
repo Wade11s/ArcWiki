@@ -24,7 +24,7 @@ bun run test:e2e        # 构建隔离的测试版 Tauri 应用，运行桌面 E
 bun --env-file=.env.local run test:e2e:live  # 显式调用真实 OpenRouter 模型
 ```
 
-桌面应用从启动进程的 `OPENROUTER_API_KEY` 环境变量读取密钥。双击安装包不会继承开发终端的环境变量；第一版请从已设置环境变量的终端启动桌面应用进行 Agent 测试。默认 API 地址是 `https://openrouter.ai/api/v1`，模型是 `stealth/space-bunny-alpha`；分别可用 `OPENROUTER_BASE_URL` 和 `OPENROUTER_MODEL` 覆盖，空白值按默认值处理。Bun 会自动加载仓库根目录的 `.env.local`，因此本地测试凭据可以只放在该文件（已被 `.gitignore` 排除）而无需写入终端环境。不要使用 `VITE_` 环境变量传递密钥，否则 Vite 会将它嵌入前端资源。
+Agent 的 API 密钥、模型与 API 地址在独立的 **Settings** 窗口中配置（菜单 ArcWiki → Settings，或 `⌘ ,` / `Ctrl+,`）。密钥保存在本机应用配置目录，由 Tauri 写入 sidecar 进程的 `OPENROUTER_API_KEY`；前端不会读回已保存的密钥。若 Settings 里还没有密钥，启动环境中的 `OPENROUTER_API_KEY`、`OPENROUTER_BASE_URL` 和 `OPENROUTER_MODEL` 仍可作为开发回退（空白值按默认处理）。默认 API 地址是 `https://openrouter.ai/api/v1`，模型是 `stealth/space-bunny-alpha`。Bun 会自动加载仓库根目录的 `.env.local`，因此本地测试凭据可以只放在该文件（已被 `.gitignore` 排除）。不要使用 `VITE_` 环境变量传递密钥，否则 Vite 会将它嵌入前端资源。双击安装包不会继承开发终端的环境变量，请在 Settings 中保存密钥。
 
 `test:e2e` 需要 Node.js 18.20+、Bun 和 Tauri 构建依赖。它使用 WebdriverIO + Tauri Service 的嵌入式 WebDriver 驱动真实桌面窗口；脚本启动仅监听 `127.0.0.1` 的模拟 OpenRouter 接口，并覆盖运行环境中的 API Key 为测试假值，不调用真实模型。测试版通过独立的 `com.wade11s.arcwiki.e2e` 标识隔离本地数据（macOS 会生成独立的 `ArcWiki E2E.app`；Linux/Windows 会将 sidecar 放在未打包的测试可执行文件旁）；测试结束会停止模拟服务。正常 `desktop:build` 不包含 WebDriver 插件。Linux 无桌面会话时可用 `xvfb-run bun run test:e2e`。目前已在 macOS 实机验证，Linux/Windows 尚未实机运行。
 
@@ -36,12 +36,12 @@ bun --env-file=.env.local run test:e2e:live  # 显式调用真实 OpenRouter 模
 - Markdown 标签页可阅读内置示例，或从本机导入 `.md` 文件；文件内容只进入应用本地状态，不会发给 Agent，除非用户主动复制并发送。
 - Agent Thread 的输入框是对话末尾的用户气泡；Enter 换行，macOS 用 Command+Enter 发送，Windows/Linux 用 Control+Enter 发送。每个 Thread 的未发送草稿独立保留，回复失败或中断后可以重试该条消息，不会重复插入用户消息。Space、Tab、草稿和对话在本机 WebView 的 localStorage 中保留；清理站点数据会清空它们。
 - 历史记录完整保留在本机，向模型发送时只选取符合 sidecar 条数与请求大小限制的最近上下文；超过长度限制的单条输入无法发送。
-- 没有设置密钥时仍能浏览文档，Agent 会显示配置提示。
+- 没有设置密钥时仍能浏览文档；Agent Thread 会提示打开 Settings。阅读宽度可在主窗口切换，也会写入 Settings。
 
 ## 结构与安全边界
 
-- `src/`：React 界面、Space/Tab 状态、Markdown 与 Thread。
-- `src-tauri/`：桌面窗口和 sidecar 生命周期；Tauri 在启动时生成随机会话令牌，并把本机端口与令牌通过限定的 IPC 命令交给窗口。
-- `sidecar/`：Bun HTTP 服务，使用 OpenAI Agents SDK 通过 OpenRouter 的 Chat Completions 接口回应 Thread。服务只绑定 `127.0.0.1`，校验会话令牌及 WebView Origin；API Key 不进入浏览器或 Git 仓库。
+- `src/`：React 界面、Space/Tab 状态、Markdown、Thread 与 Settings 窗口。
+- `src-tauri/`：主窗口、Settings 窗口和 sidecar 生命周期；Tauri 在启动时生成随机会话令牌，并把本机端口与令牌通过限定的 IPC 命令交给窗口。Settings 可通过 IPC 提交新密钥，但不会把已保存的密钥返回给前端。
+- `sidecar/`：Bun HTTP 服务，使用 OpenAI Agents SDK 通过 OpenRouter 的 Chat Completions 接口回应 Thread。服务只绑定 `127.0.0.1`，校验会话令牌及 WebView Origin；API Key 只出现在 sidecar 进程环境中，不进入浏览器或 Git 仓库。
 
 Agent 对话会发送到所配置的模型提供方；请不要在 Thread 中输入不希望发送的数据。本地保存的对话尚未加密，第一版也没有多 Agent 编排、流式 token 输出或跨设备同步。

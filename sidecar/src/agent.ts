@@ -42,7 +42,7 @@ function describeUpstreamError(err: unknown, secrets: string[]): string {
       : undefined;
 
   if (status === 401 || status === 403) {
-    return "OpenRouter rejected the request. Check that OPENROUTER_API_KEY is valid.";
+    return "OpenRouter rejected the request. Check that the API key in Settings is valid.";
   }
   if (status === 404) {
     return "OpenRouter could not find the requested model.";

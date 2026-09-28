@@ -9,6 +9,7 @@ describe("ArcWiki desktop without an OpenRouter key", () => {
     await $('button[aria-label^="Field notes,"]').click();
     await expect($("#thread-title")).toHaveText("Agent thread");
     await expect($(".agent-availability strong")).toHaveText("Agent setup needed");
+    await expect($(".agent-availability button")).toHaveText("Open Settings");
     await expect($("#agent-message")).toBeDisabled();
     await expect($(".send-button")).toBeDisabled();
 

@@ -125,7 +125,7 @@ describe("sidecar HTTP", () => {
       error: { code: string; message: string };
     };
     expect(body.error.code).toBe("not_configured");
-    expect(body.error.message).toContain("OPENROUTER_API_KEY");
+    expect(body.error.message).toContain("Settings");
     expect(body.error.message).not.toContain(TEST_TOKEN);
   });
 

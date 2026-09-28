@@ -1,0 +1,276 @@
+import { BookOpen, Sparkles } from "lucide-react";
+import { isTauri } from "@tauri-apps/api/core";
+import { useEffect, useState, type FormEvent } from "react";
+import {
+  loadPublicSettings,
+  saveSettings,
+  subscribeSettingsChanged,
+} from "./bridge";
+import {
+  normalizeApiKey,
+  normalizeBaseUrl,
+  normalizeModel,
+} from "./form";
+import { SETTINGS_GROUPS } from "./groups";
+import type {
+  ApiKeySource,
+  PublicSettings,
+  ReadingWidth,
+  SettingsGroupId,
+} from "./types";
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  if (
+    error &&
+    typeof error === "object" &&
+    "message" in error &&
+    typeof error.message === "string" &&
+    error.message
+  ) {
+    return error.message;
+  }
+  return "Could not save settings.";
+}
+
+function keyHint(source: ApiKeySource, clearing: boolean): string {
+  if (clearing) {
+    return "The current key will be removed when you save.";
+  }
+  if (source === "saved") {
+    return "A key is saved on this device. Leave blank to keep it.";
+  }
+  if (source === "environment") {
+    return "A key is provided by the launch environment. Saving a new key stores it in Settings instead.";
+  }
+  return "The key stays on this device and is given only to the local agent process.";
+}
+
+export function SettingsApp() {
+  const desktop = isTauri();
+  const [group, setGroup] = useState<SettingsGroupId>("agent");
+  const [apiKey, setApiKey] = useState("");
+  const [clearKey, setClearKey] = useState(false);
+  const [baseUrl, setBaseUrl] = useState("");
+  const [model, setModel] = useState("");
+  const [source, setSource] = useState<ApiKeySource>("none");
+  const [readingWidth, setReadingWidth] = useState<ReadingWidth>("comfortable");
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const applyPublic = (settings: PublicSettings) => {
+    setSource(settings.agent.apiKeySource);
+    setBaseUrl(settings.agent.baseUrl);
+    setModel(settings.agent.model);
+    setReadingWidth(settings.reading.width);
+    setApiKey("");
+    setClearKey(false);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadPublicSettings()
+      .then((settings) => {
+        if (!cancelled) applyPublic(settings);
+      })
+      .catch((loadError) => {
+        if (!cancelled) setError(errorMessage(loadError));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    return subscribeSettingsChanged((payload) => {
+      setReadingWidth(payload.readingWidth);
+    });
+  }, []);
+
+  const saveAgent = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!desktop) return;
+    setSaving(true);
+    setError("");
+    setStatus("");
+    try {
+      const nextKey = normalizeApiKey(apiKey);
+      const saved = await saveSettings({
+        apiKey: nextKey || undefined,
+        clearApiKey: clearKey || undefined,
+        baseUrl: normalizeBaseUrl(baseUrl),
+        model: normalizeModel(model),
+      });
+      applyPublic(saved);
+      setStatus(
+        saved.agent.apiKeySource === "none"
+          ? "Agent settings saved. Add a key to enable threads."
+          : "Agent settings saved. The local agent is updating.",
+      );
+    } catch (saveError) {
+      setError(errorMessage(saveError));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveReading = async (width: ReadingWidth) => {
+    setReadingWidth(width);
+    setError("");
+    try {
+      await saveSettings({ readingWidth: width });
+      setStatus("Reading width saved.");
+    } catch (saveError) {
+      setError(errorMessage(saveError));
+    }
+  };
+
+  const active = SETTINGS_GROUPS.find((item) => item.id === group) ?? SETTINGS_GROUPS[0];
+
+  return (
+    <main className="settings-shell">
+      <header className="settings-drag" data-tauri-drag-region>
+        <span className="settings-kicker">ArcWiki</span>
+        <h1>Settings</h1>
+      </header>
+      <div className="settings-body">
+        <nav className="settings-nav" aria-label="Settings">
+          {SETTINGS_GROUPS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`settings-nav-button ${group === item.id ? "is-current" : ""}`}
+              aria-current={group === item.id ? "page" : undefined}
+              onClick={() => {
+                setGroup(item.id);
+                setStatus("");
+                setError("");
+              }}
+            >
+              <span className="settings-nav-icon" aria-hidden="true">
+                {item.id === "agent" ? <Sparkles /> : <BookOpen />}
+              </span>
+              <span>
+                <strong>{item.title}</strong>
+                <small>{item.description}</small>
+              </span>
+            </button>
+          ))}
+        </nav>
+        <section className="settings-panel" aria-labelledby="settings-panel-title">
+          <div className="settings-panel-header">
+            <p className="settings-kicker">{active.title.toUpperCase()}</p>
+            <h2 id="settings-panel-title">{active.title}</h2>
+            <p>{active.description}</p>
+          </div>
+
+          {group === "agent" ? (
+            <form className="settings-form" onSubmit={(event) => void saveAgent(event)}>
+              {!desktop && (
+                <p className="settings-banner" role="status">
+                  Agent keys, model, and API URL are saved in the ArcWiki desktop app.
+                  This preview can still change reading width.
+                </p>
+              )}
+              <label className="settings-field">
+                <span>API key</span>
+                <input
+                  type="password"
+                  name="openrouter-api-key"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder={source === "none" ? "sk-or-…" : "••••••••"}
+                  value={apiKey}
+                  disabled={!desktop || saving}
+                  onChange={(event) => {
+                    setApiKey(event.target.value);
+                    setClearKey(false);
+                  }}
+                />
+                <small>{keyHint(source, clearKey)}</small>
+              </label>
+              {desktop && source !== "none" && (
+                <button
+                  type="button"
+                  className="settings-text-button"
+                  disabled={saving}
+                  onClick={() => {
+                    setClearKey(true);
+                    setApiKey("");
+                  }}
+                >
+                  Remove key
+                </button>
+              )}
+              <label className="settings-field">
+                <span>Model</span>
+                <input
+                  type="text"
+                  name="openrouter-model"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  value={model}
+                  disabled={!desktop || saving}
+                  onChange={(event) => setModel(event.target.value)}
+                />
+              </label>
+              <label className="settings-field">
+                <span>API base URL</span>
+                <input
+                  type="text"
+                  name="openrouter-base-url"
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={baseUrl}
+                  disabled={!desktop || saving}
+                  onChange={(event) => setBaseUrl(event.target.value)}
+                />
+                <small>OpenRouter-compatible Chat Completions endpoint.</small>
+              </label>
+              <div className="settings-actions">
+                <button type="submit" className="settings-save" disabled={!desktop || saving}>
+                  {saving ? "Saving…" : "Save Agent"}
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div className="settings-form">
+              <fieldset className="settings-field">
+                <legend>Markdown width</legend>
+                <div className="settings-choice" role="group" aria-label="Markdown width">
+                  <button
+                    type="button"
+                    aria-pressed={readingWidth === "comfortable"}
+                    onClick={() => void saveReading("comfortable")}
+                  >
+                    Comfortable
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={readingWidth === "wide"}
+                    onClick={() => void saveReading("wide")}
+                  >
+                    Wide
+                  </button>
+                </div>
+                <small>Applies to Markdown pages in the main window.</small>
+              </fieldset>
+            </div>
+          )}
+
+          {(status || error) && (
+            <p
+              className={`settings-status ${error ? "is-error" : ""}`}
+              role={error ? "alert" : "status"}
+            >
+              {error || status}
+            </p>
+          )}
+        </section>
+      </div>
+    </main>
+  );
+}
