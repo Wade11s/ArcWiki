@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Only the app's own IPC commands are available to the webview.",
-  "windows": ["main", "settings"],
+  "windows": ["main", "settings", "space-settings", "thread-archive"],
   "permissions": ["core:default"]
 }

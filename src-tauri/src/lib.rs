@@ -1,4 +1,5 @@
 mod settings;
+mod workspace_windows;
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -18,6 +19,10 @@ use settings::{
     load_stored_settings, profile_changed, public_settings, remove_avatar, resolve_settings,
     write_avatar, write_stored_settings, EnvSnapshot, PublicSettings, ResolvedSettings,
     SaveSettingsInput, SettingsChanged,
+};
+use workspace_windows::{
+    open_space_settings, open_thread_archive, require_main, workspace_claim_request,
+    workspace_owner_ready, workspace_request, workspace_response, WorkspaceBroker,
 };
 
 const SETTINGS_WINDOW_LABEL: &str = "settings";
@@ -242,8 +247,10 @@ fn install_menu(app: &tauri::App) -> tauri::Result<()> {
 
 #[tauri::command]
 async fn get_backend_connection(
+    requester: tauri::WebviewWindow,
     state: State<'_, BackendState>,
 ) -> Result<BackendConnection, String> {
+    require_main(requester.label())?;
     for _ in 0..100 {
         {
             let status = state
@@ -330,11 +337,19 @@ pub fn run() {
 
     let app = builder
         .manage(BackendState::default())
+        .manage(WorkspaceBroker::default())
+        .on_window_event(workspace_windows::on_window_event)
         .invoke_handler(tauri::generate_handler![
             get_backend_connection,
             get_settings,
             save_settings,
-            open_settings
+            open_settings,
+            open_space_settings,
+            open_thread_archive,
+            workspace_request,
+            workspace_claim_request,
+            workspace_response,
+            workspace_owner_ready
         ])
         .setup(|app| {
             install_menu(app)?;

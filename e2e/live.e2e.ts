@@ -1,4 +1,5 @@
 import { $, $$, browser, expect } from "@wdio/globals";
+import { openThreadFromSidebar } from "./threadTools";
 
 async function expectReply(index: number) {
   await browser.waitUntil(
@@ -24,11 +25,13 @@ describe("ArcWiki desktop with the real OpenRouter model", () => {
     await browser.execute(() => localStorage.removeItem("arcwiki.workspace.v1"));
     await browser.refresh();
     await $('button[aria-label^="Field notes,"]').click();
+    await openThreadFromSidebar();
     await expect($("#thread-title")).toHaveText("Agent thread");
     await expect($(".agent-status-pill")).toHaveText("Local agent");
     await expect($("#agent-message")).toBeEnabled();
 
     await $("#agent-message").setValue("Remember the word kiwi. Reply with that word only.");
+    await expect($(".send-button")).toBeEnabled();
     await $(".send-button").click();
     await expectReply(0);
 
@@ -38,6 +41,7 @@ describe("ArcWiki desktop with the real OpenRouter model", () => {
     await $(".send-button").click();
     await expectReply(1);
     await browser.refresh();
+    await openThreadFromSidebar();
     await expect($$(".message-row.from-user:not(.is-draft)")).toBeElementsArrayOfSize(2);
     await expect($$(".message-row.from-agent .message-bubble")).toBeElementsArrayOfSize(2);
   });

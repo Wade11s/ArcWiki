@@ -22,6 +22,11 @@ const attempts = new Map<string, number>();
 const slowReply = Promise.withResolvers<void>();
 let slowStarted = false;
 let slowFinished = false;
+// Archive has its own release gate so this scenario cannot consume the
+// closed-tab suite's one-shot Slow E2E reply.
+const archivePendingReply = Promise.withResolvers<void>();
+let archivePendingStarted = false;
+let archivePendingFinished = false;
 const mockOpenRouter = live ? null : Bun.serve({
   hostname: "127.0.0.1",
   port: 0,
@@ -32,6 +37,16 @@ const mockOpenRouter = live ? null : Bun.serve({
     }
     if (path === "/v1/__e2e/release-slow" && request.method === "POST") {
       slowReply.resolve();
+      return Response.json({ ok: true });
+    }
+    if (path === "/v1/__e2e/archive-pending-state" && request.method === "GET") {
+      return Response.json({
+        started: archivePendingStarted,
+        finished: archivePendingFinished,
+      });
+    }
+    if (path === "/v1/__e2e/release-archive-pending" && request.method === "POST") {
+      archivePendingReply.resolve();
       return Response.json({ ok: true });
     }
     if (path !== "/v1/chat/completions" || request.method !== "POST") {
@@ -60,6 +75,11 @@ const mockOpenRouter = live ? null : Bun.serve({
       slowStarted = true;
       await slowReply.promise;
       slowFinished = true;
+    }
+    if (last === "Archive pending reply") {
+      archivePendingStarted = true;
+      await archivePendingReply.promise;
+      archivePendingFinished = true;
     }
     return Response.json({
       id: "chatcmpl-arcwiki-e2e",
@@ -103,6 +123,9 @@ const env = {
   OPENROUTER_BASE_URL: live
     ? DEFAULT_OPENROUTER_BASE_URL
     : `http://127.0.0.1:${mockOpenRouter!.port}/v1`,
+  // Mock suites must never send a fixture URL to a paid remote fetch service.
+  TINYFISH_API_KEY: live ? process.env.TINYFISH_API_KEY : "",
+  ARCWIKI_E2E_LIT: Bun.which(process.env.ARCWIKI_LIT_PATH ?? "lit") ? "1" : "0",
   ARCWIKI_E2E_BINARY: binary,
   ARCWIKI_E2E_SPEC: live ? "live.e2e.ts" : "thread.e2e.ts",
   ARCWIKI_E2E_LIVE: live ? "1" : "0",
@@ -135,11 +158,23 @@ try {
   if (!live) {
     await run(
       ["node", "node_modules/@wdio/cli/bin/wdio.js", "run", "e2e/wdio.conf.ts"],
+      { ...env, ARCWIKI_E2E_SPEC: "sidebar-windows.e2e.ts" },
+    );
+    await run(
+      ["node", "node_modules/@wdio/cli/bin/wdio.js", "run", "e2e/wdio.conf.ts"],
       { ...env, ARCWIKI_E2E_SPEC: "wiki.e2e.ts" },
     );
     await run(
       ["node", "node_modules/@wdio/cli/bin/wdio.js", "run", "e2e/wdio.conf.ts"],
       { ...env, OPENROUTER_API_KEY: "", ARCWIKI_E2E_SPEC: "unconfigured.e2e.ts" },
+    );
+    await run(
+      ["node", "node_modules/@wdio/cli/bin/wdio.js", "run", "e2e/wdio.conf.ts"],
+      { ...env, OPENROUTER_API_KEY: "", ARCWIKI_E2E_SPEC: "home.e2e.ts" },
+    );
+    await run(
+      ["node", "node_modules/@wdio/cli/bin/wdio.js", "run", "e2e/wdio.conf.ts"],
+      { ...env, OPENROUTER_API_KEY: "", ARCWIKI_E2E_SPEC: "wiki-content.e2e.ts" },
     );
   }
 } finally {

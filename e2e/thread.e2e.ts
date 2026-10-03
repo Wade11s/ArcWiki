@@ -1,7 +1,9 @@
 import { $, $$, browser, expect } from "@wdio/globals";
+import { openThreadFromSidebar } from "./threadTools";
 
 async function openThread() {
   await $('button[aria-label^="Field notes,"]').click();
+  await openThreadFromSidebar();
   await expect($("#thread-title")).toHaveText("Agent thread");
   await expect($(".agent-status-pill")).toHaveText("Local agent");
 }
@@ -18,7 +20,108 @@ describe("ArcWiki desktop Agent Thread", () => {
     // normal ArcWiki; only reset that isolated test workspace.
     await browser.execute(() => localStorage.removeItem("arcwiki.workspace.v1"));
     await browser.refresh();
-    await expect($(".note-content h1")).toHaveText("A calmer kind of workspace");
+    await expect($(".space-home-heading h1")).toHaveText("Studio");
+  });
+
+  it("pins Home and thread creation above independently collapsible tab groups", async () => {
+    await expect($$(".sidebar-pins button")).toBeElementsArrayOfSize(2);
+    await expect($$(".sidebar-pins .tab-title")[0]).toHaveText("Home Page");
+    await expect($(".pinned-thread-action")).toHaveText("Add Agent Thread");
+    expect(await $$(".tab-group-heading > span:first-child").map((label) => label.getText()))
+      .toEqual(["Pages", "Topics", "Agent Threads"]);
+    await expect($("#sidebar-topic-tabs")).toHaveText("No topics yet");
+    await expect($("#sidebar-thread-tabs")).toHaveText("No agent threads yet");
+    await expect($('//button[normalize-space(.)="New note"]')).not.toExist();
+    const order = await browser.execute(() => {
+      const selectors = [".current-space-card", ".sidebar-pins", ".sidebar-tab-groups"];
+      return selectors.map((selector) => document.querySelector(selector)!.getBoundingClientRect().top);
+    });
+    expect(order[0]).toBeLessThan(order[1]);
+    expect(order[1]).toBeLessThan(order[2]);
+    const tabCount = await browser.execute(() =>
+      JSON.parse(localStorage.getItem("arcwiki.workspace.v1")!).tabs.length,
+    );
+    await browser.execute(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "n", metaKey: true, bubbles: true, cancelable: true,
+      }));
+    });
+    expect(await browser.execute(() =>
+      JSON.parse(localStorage.getItem("arcwiki.workspace.v1")!).tabs.length,
+    )).toBe(tabCount);
+
+    await $('button[aria-label="Collapse Pages"]').click();
+    await expect($("#sidebar-page-tabs")).not.toBeDisplayed();
+    await expect($('button[aria-label="Expand Pages"]')).toHaveAttribute("aria-expanded", "false");
+    await expect($(".space-home-heading h1")).toHaveText("Studio");
+    await $('button[aria-label="Collapse Topics"]').click();
+    await expect($("#sidebar-topic-tabs")).not.toBeDisplayed();
+    await $('button[aria-label="Expand Topics"]').click();
+    await expect($("#sidebar-topic-tabs")).toBeDisplayed();
+
+    await $(".sidebar-pins .tab-button").click();
+    await expect($(".space-home-heading h1")).toHaveText("Studio");
+    await expect($$(".sidebar [aria-current=page]")).toBeElementsArrayOfSize(1);
+    await expect($(".sidebar-pins .tab-button")).toHaveAttribute("aria-current", "page");
+
+    await $('button[aria-label="Collapse Agent Threads"]').click();
+    await $(".pinned-thread-action").click();
+    await expect($("#thread-title")).toHaveText("New agent thread");
+    await expect($("#sidebar-thread-tabs")).toBeDisplayed();
+    await expect($("#sidebar-thread-tabs [data-tab-button]")).toHaveAttribute("aria-current", "page");
+    const focusedGroup = await browser.execute(() => {
+      const button = document.querySelector<HTMLButtonElement>("#sidebar-thread-tabs [data-tab-button]")!;
+      button.focus();
+      button.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "ArrowDown", bubbles: true, cancelable: true,
+      }));
+      return document.activeElement?.closest(".tab-list")?.id;
+    });
+    expect(focusedGroup).toBe("sidebar-thread-tabs");
+
+    await $('button[aria-label^="Field notes,"]').click();
+    await expect($("#sidebar-page-tabs")).toBeDisplayed();
+    await expect($("#sidebar-thread-tabs")).toBeDisplayed();
+    await $('button[aria-label^="Studio,"]').click();
+    await expect($("#sidebar-page-tabs")).not.toBeDisplayed();
+    await expect($(".space-home-heading h1")).toHaveText("Studio");
+    await openThreadFromSidebar("New agent thread");
+    await expect($("#thread-title")).toHaveText("New agent thread");
+    await $('button[aria-label="Expand Pages"]').click();
+    await expect($("#sidebar-page-tabs")).toBeDisplayed();
+  });
+
+  it("scrolls long grouped lists without moving the pinned navigation or Space switcher", async () => {
+    await browser.execute(() => {
+      const saved = JSON.parse(localStorage.getItem("arcwiki.workspace.v1")!);
+      for (let index = 0; index < 40; index++) {
+        saved.tabs.push({
+          id: `sidebar-overflow-${index}`, spaceId: "studio",
+          title: `Overflow thread ${index}`, kind: "thread",
+        });
+      }
+      localStorage.setItem("arcwiki.workspace.v1", JSON.stringify(saved));
+    });
+    await browser.refresh();
+    await expect($$("#sidebar-thread-tabs [data-tab-button]")).toBeElementsArrayOfSize(40);
+    const layout = await browser.execute(() => {
+      const groups = document.querySelector<HTMLElement>(".sidebar-tab-groups")!;
+      const pins = document.querySelector(".sidebar-pins")!;
+      const footer = document.querySelector(".sidebar-footer")!;
+      const before = [pins.getBoundingClientRect().top, footer.getBoundingClientRect().top];
+      groups.scrollTop = groups.scrollHeight;
+      return {
+        before,
+        after: [pins.getBoundingClientRect().top, footer.getBoundingClientRect().top],
+        scrollTop: groups.scrollTop,
+        overflow: getComputedStyle(groups).overflowY,
+      };
+    });
+    expect(layout.scrollTop).toBeGreaterThan(0);
+    expect(layout.overflow).toBe("auto");
+    expect(layout.after).toEqual(layout.before);
+    await $('button[data-tab-button][aria-label="Overflow thread 39"]').click();
+    await expect($("#thread-title")).toHaveText("Overflow thread 39");
   });
 
   it("continues a conversation across navigation and WebView reload", async () => {
@@ -34,11 +137,12 @@ describe("ArcWiki desktop Agent Thread", () => {
     );
 
     await $('button[aria-label^="Studio,"]').click();
-    await expect($(".note-content h1")).toHaveText("A calmer kind of workspace");
+    await expect($(".space-home-heading h1")).toHaveText("Studio");
     await openThread();
     await expect($$(".message-row.from-user:not(.is-draft)")).toBeElementsArrayOfSize(2);
 
     await browser.refresh();
+    await openThreadFromSidebar();
     await expect($("#thread-title")).toHaveText("Agent thread");
     await expect($$(".message-row.from-agent .message-bubble")).toBeElementsArrayOfSize(2);
   });
@@ -103,7 +207,10 @@ describe("ArcWiki desktop Agent Thread", () => {
     await send("Please fail once");
     await expect($(".thread-error")).toBeDisplayed();
     await browser.refresh();
+    await openThreadFromSidebar();
     await expect($(".thread-error button")).toHaveText("Retry");
+    // Reload also rebinds the Wiki scope. A visible Retry is not ready yet.
+    await expect($(".thread-error button")).toBeEnabled();
     await $(".thread-error button").click();
     await expect($(".message-row.from-agent .message-bubble")).toHaveText(
       "E2E reply 1: Please fail once",
@@ -127,18 +234,19 @@ describe("ArcWiki desktop Agent Thread", () => {
   it("keeps an unsent draft in its own thread across a reload", async () => {
     await openThread();
     await $("#agent-message").setValue("A draft for the first thread");
-    await $('//button[contains(@class,"side-action")][.//span[normalize-space(.)="New thread"]]').click();
+    await $(".pinned-thread-action").click();
     await expect($("#thread-title")).toHaveText("New agent thread");
     await expect($("#agent-message")).toHaveValue("");
     await $('//button[@data-tab-button][.//span[normalize-space(.)="Agent thread"]]').click();
     await expect($("#agent-message")).toHaveValue("A draft for the first thread");
     await browser.refresh();
+    await openThreadFromSidebar();
     await expect($("#agent-message")).toHaveValue("A draft for the first thread");
   });
 
   it("does not restore a closed thread when its pending reply completes", async () => {
     await openThread();
-    await $('//button[contains(@class,"side-action")][.//span[normalize-space(.)="New thread"]]').click();
+    await $(".pinned-thread-action").click();
     await send("Slow E2E reply");
     const modelUrl = process.env.OPENROUTER_BASE_URL;
     if (!modelUrl) throw new Error("Missing local E2E model URL");
@@ -165,6 +273,7 @@ describe("ArcWiki desktop Agent Thread", () => {
       { timeout: 15_000, timeoutMsg: "the model request did not finish" },
     );
     await browser.refresh();
+    await openThreadFromSidebar();
     await expect($('button[aria-label="Close New agent thread"]')).not.toExist();
     await expect($(".thread-empty")).toBeDisplayed();
   });

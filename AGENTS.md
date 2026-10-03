@@ -14,10 +14,4 @@
 
 先按**子任务**判断难度和独立性：可并行且文件所有权清楚，或需要独立审查时才派发；依赖前一步结果的工作留在当前线程。派发时写清目标、文件边界、接口契约、验收方式及凭据边界；`worker` 实现、`scout` 调查、`reviewer` 验证。
 
-| 子任务难度 | 典型情况 | 模型选择 |
-| --- | --- | --- |
-| 较难 | 跨前端、sidecar、Tauri 的设计；安全边界或复杂故障 | `openai-subscribed/gpt-6-sol[effort=high]` |
-| 中等 | 单个模块内有明确边界但需要技术取舍的功能 | `x_ai-subscribed/grok-4.6[effort=xhigh]`（extra high） |
-| 简单 | 范围局部、验收条件明确的修正或文档 | `openai-subscribed/gpt-6-luna[effort=max]` |
-
-模型不可用时说明原因并确认替代选择，不静默换模型。
+子任务难度对应的模型池、池外备选模型与选择器校验方式见 `docs/agents/subagent.md`；模型选择以该文件为准。

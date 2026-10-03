@@ -1,0 +1,22 @@
+{
+  "spaces": [
+    { "id": "fixture-release", "name": "Borealis release", "purpose": "Borealis cooling rollout, latency measurements and acceptance criteria" },
+    { "id": "fixture-habitat", "name": "Habitat restoration", "purpose": "Mangrove habitat surveys and conservation decisions" }
+  ],
+  "sources": [
+    { "key": "decision", "kind": "markdown", "title": "Borealis release decision", "file": "release-decision.md", "spaceId": "fixture-release" },
+    { "key": "guide", "kind": "url", "url": "https://example.com/borealis/guide", "responseFile": "url-response.json", "spaceId": "fixture-release" },
+    { "key": "audit", "kind": "pdf", "file": "cooling-audit.pdf", "extractedFile": "cooling-audit.md", "pageCount": 1, "spaceId": "fixture-release" },
+    { "key": "inbox", "kind": "markdown", "title": "Orion intake note", "file": "orion-intake.md", "spaceId": null },
+    { "key": "habitat", "kind": "markdown", "title": "Mangrove survey", "file": "mangrove-survey.md", "spaceId": "fixture-habitat" }
+  ],
+  "pages": [
+    { "key": "overview", "spaceId": "fixture-release", "title": "Borealis rollout overview", "file": "rollout-overview.md", "sourceKeys": ["decision", "guide", "audit"] },
+    { "key": "checklist", "spaceId": "fixture-release", "title": "Cooling acceptance checklist", "file": "acceptance-checklist.md", "sourceKeys": ["decision", "audit"] },
+    { "key": "habitat", "spaceId": "fixture-habitat", "title": "Mangrove restoration plan", "file": "restoration-plan.md", "sourceKeys": ["habitat"] }
+  ],
+  "threads": [
+    { "threadId": "fixture-release-thread", "spaceId": "fixture-release" },
+    { "threadId": "fixture-habitat-thread", "spaceId": "fixture-habitat" }
+  ]
+}

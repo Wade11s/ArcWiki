@@ -1,12 +1,12 @@
 import {
+  Archive,
   BookOpen,
-  Check,
   CircleHelp,
-  FilePlus2,
   FileText,
   Headphones,
   LoaderCircle,
-  MessageCircle,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   RefreshCw,
   Send,
@@ -16,10 +16,18 @@ import {
   X,
 } from "lucide-react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { emit } from "@tauri-apps/api/event";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { flushSync } from "react-dom";
 import type {
-  ChangeEvent,
   ComponentProps,
   CSSProperties,
   FormEvent,
@@ -45,47 +53,27 @@ import {
 } from "./settings/bridge";
 import { threadDisplayName } from "./settings/form";
 import type { ReadingWidth } from "./settings/types";
-import { openSettings } from "./settings/window";
+import { openSettings, openSpaceSettings, openThreadArchive } from "./settings/window";
+import { SidebarNavigation, type SidebarItem } from "./SidebarNavigation";
+import { SpaceHome } from "./SpaceHome";
 import { listenForSpaceGestures } from "./spaceGesture";
-import { WikiPanel } from "./WikiPanel";
-import { wikiRequest, type WikiQueryResult, type WikiSpace } from "./wikiClient";
-
-type Space = {
-  id: string;
-  name: string;
-  subtitle: string;
-  color: string;
-  tint: string;
-  icon: "studio" | "research" | "personal";
-};
-
-type NoteTab = {
-  id: string;
-  spaceId: string;
-  title: string;
-  kind: "markdown" | "thread";
-  content?: string;
-  imported?: boolean;
-};
-
-type ChatMessage = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  createdAt: number;
-  evidence?: WikiQueryResult[];
-};
-
-type Workspace = {
-  version: 1;
-  spaces: Space[];
-  tabs: NoteTab[];
-  activeSpaceId: string;
-  activeTabId: string;
-  lastTabBySpace: Record<string, string>;
-  conversations: Record<string, ChatMessage[]>;
-  drafts: Record<string, string>;
-};
+import { parseThreadCommand, THREAD_COMMANDS, type ThreadCommand } from "./threadCommands";
+import { ThreadWikiTools } from "./ThreadWikiTools";
+import { wikiRequest, type WikiPage, type WikiQueryResult, type WikiSpace } from "./wikiClient";
+import { wikiContentStore } from "./wikiContentStore";
+import {
+  archiveThread,
+  isArchivedThread,
+  isOpenTab,
+  normalizeWorkspace,
+  openSpace,
+  openTabsInSpace,
+  type ChatMessage,
+  type NoteTab,
+  type Space,
+  type Workspace,
+} from "./workspace/model";
+import { attachWorkspaceOwner, type WorkspaceOwner } from "./workspace/windowOwner";
 
 type AgentStatus =
   | { state: "checking" }
@@ -214,169 +202,10 @@ function loadWorkspace(): Workspace {
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return fallback;
-
-    const saved: unknown = JSON.parse(raw);
-    if (
-      !saved ||
-      typeof saved !== "object" ||
-      !("version" in saved) ||
-      saved.version !== 1 ||
-      !("spaces" in saved) ||
-      !Array.isArray(saved.spaces) ||
-      !("tabs" in saved) ||
-      !Array.isArray(saved.tabs)
-    ) {
-      return fallback;
-    }
-
-    const spaces = saved.spaces.filter(
-      (space): space is Space =>
-        Boolean(space) &&
-        typeof space === "object" &&
-        "id" in space &&
-        typeof space.id === "string" &&
-        "name" in space &&
-        typeof space.name === "string" &&
-        "subtitle" in space &&
-        typeof space.subtitle === "string" &&
-        "color" in space &&
-        typeof space.color === "string" &&
-        "tint" in space &&
-        typeof space.tint === "string" &&
-        "icon" in space &&
-        (space.icon === "studio" ||
-          space.icon === "research" ||
-          space.icon === "personal"),
-    );
-    const validSpaceIds = new Set(spaces.map((space) => space.id));
-    const tabs = saved.tabs.filter(
-      (tab): tab is NoteTab =>
-        Boolean(tab) &&
-        typeof tab === "object" &&
-        "id" in tab &&
-        typeof tab.id === "string" &&
-        "spaceId" in tab &&
-        typeof tab.spaceId === "string" &&
-        validSpaceIds.has(tab.spaceId) &&
-        "title" in tab &&
-        typeof tab.title === "string" &&
-        "kind" in tab &&
-        (tab.kind === "markdown" || tab.kind === "thread") &&
-        (tab.kind === "thread" ||
-          ("content" in tab && typeof tab.content === "string")),
-    );
-
-    if (!spaces.length || !tabs.length) return fallback;
-
-    const savedSpaceId =
-      "activeSpaceId" in saved && typeof saved.activeSpaceId === "string"
-        ? saved.activeSpaceId
-        : fallback.activeSpaceId;
-    const activeSpaceId = validSpaceIds.has(savedSpaceId)
-      ? savedSpaceId
-      : spaces[0].id;
-    const savedLastTabBySpace =
-      "lastTabBySpace" in saved &&
-      saved.lastTabBySpace &&
-      typeof saved.lastTabBySpace === "object"
-        ? (saved.lastTabBySpace as Record<string, unknown>)
-        : {};
-    const lastTabBySpace: Record<string, string> = {};
-    for (const space of spaces) {
-      const preferredId = savedLastTabBySpace[space.id];
-      lastTabBySpace[space.id] =
-        typeof preferredId === "string" &&
-        tabs.some((tab) => tab.id === preferredId && tab.spaceId === space.id)
-          ? preferredId
-          : tabs.find((tab) => tab.spaceId === space.id)?.id ?? "";
-    }
-    const savedTabId =
-      "activeTabId" in saved && typeof saved.activeTabId === "string"
-        ? saved.activeTabId
-        : fallback.activeTabId;
-    const activeTabId =
-      tabs.find((tab) => tab.id === savedTabId)?.spaceId === activeSpaceId
-        ? savedTabId
-        : lastTabBySpace[activeSpaceId] || tabs[0].id;
-    lastTabBySpace[activeSpaceId] = activeTabId;
-
-    const conversations: Record<string, ChatMessage[]> = {};
-    if ("conversations" in saved && saved.conversations) {
-      for (const [tabId, messages] of Object.entries(saved.conversations)) {
-        if (!tabs.some((tab) => tab.id === tabId && tab.kind === "thread")) {
-          continue;
-        }
-        if (!Array.isArray(messages)) continue;
-        conversations[tabId] = messages.filter(
-          (message): message is ChatMessage =>
-            Boolean(message) &&
-            typeof message === "object" &&
-            "id" in message &&
-            typeof message.id === "string" &&
-            "role" in message &&
-            (message.role === "user" || message.role === "assistant") &&
-            "content" in message &&
-            typeof message.content === "string" &&
-            "createdAt" in message &&
-            typeof message.createdAt === "number" &&
-            Number.isFinite(message.createdAt),
-        ).map((message) => ({
-          id: message.id,
-          role: message.role,
-          content: message.content,
-          createdAt: message.createdAt,
-          ...(Array.isArray(message.evidence)
-            ? { evidence: evidenceItems(message.evidence) }
-            : {}),
-        }));
-      }
-    }
-
-    const drafts: Record<string, string> = {};
-    if ("drafts" in saved && saved.drafts && typeof saved.drafts === "object") {
-      for (const [tabId, value] of Object.entries(saved.drafts)) {
-        if (
-          tabs.some((tab) => tab.id === tabId && tab.kind === "thread") &&
-          typeof value === "string"
-        ) {
-          drafts[tabId] = value.slice(0, MAX_CONTENT_CHARS);
-        }
-      }
-    }
-
-    return {
-      version: 1,
-      spaces,
-      tabs,
-      activeSpaceId,
-      activeTabId,
-      lastTabBySpace,
-      conversations,
-      drafts,
-    };
+    return normalizeWorkspace(JSON.parse(raw), fallback);
   } catch {
     return fallback;
   }
-}
-
-function openSpace(current: Workspace, spaceId: string): Workspace {
-  if (current.activeSpaceId === spaceId) return current;
-  const nextTab =
-    current.tabs.find(
-      (tab) =>
-        tab.spaceId === spaceId && tab.id === current.lastTabBySpace[spaceId],
-    ) ?? current.tabs.find((tab) => tab.spaceId === spaceId);
-  if (!nextTab) return current;
-  return {
-    ...current,
-    activeSpaceId: spaceId,
-    activeTabId: nextTab.id,
-    lastTabBySpace: {
-      ...current.lastTabBySpace,
-      [current.activeSpaceId]: current.activeTabId,
-      [spaceId]: nextTab.id,
-    },
-  };
 }
 
 function formatDate(timestamp: number) {
@@ -390,14 +219,6 @@ function SpaceIcon({ icon }: { icon: Space["icon"] }) {
   if (icon === "studio") return <BookOpen aria-hidden="true" />;
   if (icon === "research") return <Sparkles aria-hidden="true" />;
   return <Headphones aria-hidden="true" />;
-}
-
-function TabIcon({ tab }: { tab: NoteTab }) {
-  return tab.kind === "thread" ? (
-    <MessageCircle aria-hidden="true" />
-  ) : (
-    <FileText aria-hidden="true" />
-  );
 }
 
 function SafeMarkdownLink({
@@ -441,7 +262,6 @@ function App() {
   const [agentStatus, setAgentStatus] = useState<AgentStatus>({
     state: "checking",
   });
-  const [importError, setImportError] = useState("");
   const [notice, setNotice] = useState("");
   const [sending, setSending] = useState<Record<string, number>>({});
   const [threadErrors, setThreadErrors] = useState<Record<string, string>>({});
@@ -453,10 +273,20 @@ function App() {
   const [displayName, setDisplayName] = useState("");
   const [avatarDataUrl, setAvatarDataUrl] = useState<string | null>(null);
   const [isEditingNote, setIsEditingNote] = useState(false);
-  const [wikiOpen, setWikiOpen] = useState(false);
+  const [homeOpen, setHomeOpen] = useState(true);
+  const [sidebarPinned, setSidebarPinned] = useState(true);
+  const [sidebarRevealed, setSidebarRevealed] = useState(false);
   const [wikiReady, setWikiReady] = useState(false);
-  const importInputRef = useRef<HTMLInputElement>(null);
+  const wikiContentBySpace = useSyncExternalStore(
+    wikiContentStore.subscribe,
+    wikiContentStore.getSnapshot,
+    wikiContentStore.getSnapshot,
+  );
+  const [selectedWikiPageId, setSelectedWikiPageId] = useState<string | null>(null);
+  const [threadCommands, setThreadCommands] = useState<Record<string, ThreadCommand & { id: string }>>({});
+  const [threadCommandErrors, setThreadCommandErrors] = useState<Record<string, string>>({});
   const sidebarRef = useRef<HTMLElement | null>(null);
+  const sidebarFocusRequest = useRef<"edge" | "sidebar" | null>(null);
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
   const composerInputRef = useRef<HTMLTextAreaElement | null>(null);
   const backendCheckId = useRef(0);
@@ -466,6 +296,16 @@ function App() {
   const pendingRequests = useRef<Record<string, AbortController>>({});
   const lastVisibleThread = useRef({ tabId: "", count: 0 });
   const shouldFollowThread = useRef(true);
+  const ownerRef = useRef<WorkspaceOwner | null>(null);
+  const workspaceRef = useRef(workspace);
+  const mainMounted = useRef(false);
+  const lastArchiveSnapshot = useRef<{
+    tab: NoteTab;
+    spaceName: string | undefined;
+    messages: ChatMessage[] | undefined;
+    draft: string | undefined;
+    sending: boolean;
+  }[]>([]);
 
   const activeSpace =
     workspace.spaces.find((space) => space.id === workspace.activeSpaceId) ??
@@ -474,18 +314,28 @@ function App() {
     workspace.tabs.find(
       (tab) =>
         tab.id === workspace.activeTabId &&
-        tab.spaceId === workspace.activeSpaceId,
+        tab.spaceId === workspace.activeSpaceId &&
+        isOpenTab(tab),
     ) ??
-    workspace.tabs.find((tab) => tab.spaceId === workspace.activeSpaceId) ??
-    workspace.tabs[0];
+    openTabsInSpace(workspace.tabs, workspace.activeSpaceId)[0];
   const visibleTabs = useMemo(
-    () => workspace.tabs.filter((tab) => tab.spaceId === activeSpace?.id),
+    () => openTabsInSpace(workspace.tabs, activeSpace?.id ?? ""),
     [workspace.tabs, activeSpace?.id],
   );
+  const visibleWikiState = wikiContentBySpace[activeSpace?.id ?? ""];
+  const visibleWikiContent = visibleWikiState?.content;
+  const visibleWikiPages = visibleWikiContent?.pages ?? [];
+  const activeWikiPage = visibleWikiPages.find((page) => page.id === selectedWikiPageId);
+  const activeDocument = activeWikiPage ?? activeTab;
   const activeMessages = activeTab
     ? (workspace.conversations[activeTab.id] ?? [])
     : [];
   const draft = activeTab ? (workspace.drafts[activeTab.id] ?? "") : "";
+  const activeThreadCommand = activeTab ? threadCommands[activeTab.id] : undefined;
+  const isCommandDraft = draft.trimStart().startsWith("/");
+  const commandSuggestions = /^\/[a-z]*$/i.test(draft.trim())
+    ? THREAD_COMMANDS.filter((command) => `/${command.name}`.startsWith(draft.trim().toLowerCase()))
+    : [];
   const wikiConnection =
     agentStatus.state === "ready" || agentStatus.state === "unconfigured"
       ? { port: agentStatus.port, token: agentStatus.token }
@@ -498,11 +348,53 @@ function App() {
     .sort()
     .join("\n");
 
+  const retryWikiContent = useCallback(() => {
+    if (!wikiConnection || !activeSpace) return;
+    void wikiContentStore.refresh(wikiConnection, activeSpace.id);
+  }, [wikiConnection?.port, wikiConnection?.token, activeSpace?.id]);
+
   const updateDraft = useCallback((tabId: string, value: string) => {
+    setThreadCommandErrors((current) => current[tabId] ? { ...current, [tabId]: "" } : current);
     setWorkspace((current) => ({
       ...current,
       drafts: { ...current.drafts, [tabId]: value },
     }));
+  }, []);
+
+  useLayoutEffect(() => {
+    mainMounted.current = true;
+    return () => { mainMounted.current = false; };
+  }, []);
+
+  useLayoutEffect(() => {
+    workspaceRef.current = workspace;
+  }, [workspace]);
+
+  useLayoutEffect(() => {
+    if (sidebarFocusRequest.current === "edge" && !sidebarPinned) {
+      document.querySelector<HTMLButtonElement>(".sidebar-edge-trigger")?.focus();
+      sidebarFocusRequest.current = null;
+    } else if (sidebarFocusRequest.current === "sidebar" && (sidebarPinned || sidebarRevealed)) {
+      sidebarRef.current?.querySelector<HTMLButtonElement>(".sidebar-toggle")?.focus();
+      sidebarFocusRequest.current = null;
+    }
+  }, [sidebarPinned, sidebarRevealed]);
+
+  // Other windows submit semantic changes, never replacement Workspace snapshots.
+  // Acknowledge mutations only after the latest React state has been persisted.
+  const commitWorkspace = useCallback((change: (current: Workspace) => Workspace) => {
+    if (!mainMounted.current) throw new Error("The main Workspace owner is no longer available.");
+    let previous = workspaceRef.current;
+    flushSync(() => setWorkspace((current) => {
+      previous = current;
+      return change(current);
+    }));
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(workspaceRef.current));
+    } catch {
+      flushSync(() => setWorkspace(previous));
+      throw new Error("Workspace could not be saved. Free local storage and try again.");
+    }
   }, []);
 
   useLayoutEffect(() => {
@@ -515,12 +407,12 @@ function App() {
   useLayoutEffect(() => {
     const scroll = contentScrollRef.current;
     if (!scroll) return;
-    scroll.scrollTop = !wikiOpen && activeTab?.kind === "thread" ? scroll.scrollHeight : 0;
+    scroll.scrollTop = !homeOpen && !activeWikiPage && activeTab?.kind === "thread" ? scroll.scrollHeight : 0;
     shouldFollowThread.current = true;
-  }, [activeTab?.id, wikiOpen]);
+  }, [activeTab?.id, homeOpen, activeWikiPage?.id, activeThreadCommand?.id]);
 
   useLayoutEffect(() => {
-    if (!activeTab || activeTab.kind !== "thread") return;
+    if (homeOpen || activeWikiPage || !activeTab || activeTab.kind !== "thread") return;
     const previous = lastVisibleThread.current;
     lastVisibleThread.current = { tabId: activeTab.id, count: activeMessages.length };
     if (
@@ -531,7 +423,7 @@ function App() {
       const scroll = contentScrollRef.current;
       if (scroll) scroll.scrollTop = scroll.scrollHeight;
     }
-  }, [activeTab?.id, activeMessages.length]);
+  }, [activeTab?.id, activeMessages.length, homeOpen, activeWikiPage?.id]);
 
   useEffect(() => {
     try {
@@ -743,6 +635,31 @@ function App() {
     return () => { active = false; };
   }, [wikiConnection?.port, wikiConnection?.token, workspace.spaces, threadBindings]);
 
+  useEffect(() => {
+    if (!wikiConnection || !wikiReady || !activeSpace) return;
+    void wikiContentStore.refresh(wikiConnection, activeSpace.id);
+  }, [
+    wikiConnection?.port,
+    wikiConnection?.token,
+    wikiReady,
+    activeSpace?.id,
+    visibleWikiState?.refreshRevision ?? 0,
+  ]);
+
+  const openHome = useCallback(() => {
+    setSelectedWikiPageId(null);
+    setHomeOpen(true);
+    setIsEditingNote(false);
+    setNotice("");
+  }, []);
+
+  const openWikiPage = useCallback((page: WikiPage) => {
+    setSelectedWikiPageId(page.id);
+    setHomeOpen(false);
+    setIsEditingNote(false);
+    setNotice("");
+  }, []);
+
   const animateSpaceTransition = useCallback((direction: number, update: () => void) => {
     const normalizedDirection: 1 | -1 = direction < 0 ? -1 : 1;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
@@ -804,10 +721,10 @@ function App() {
         [tab.spaceId]: tab.id,
       },
     }));
-    setImportError("");
     setNotice("");
     setIsEditingNote(false);
-    setWikiOpen(false);
+    setHomeOpen(false);
+    setSelectedWikiPageId(null);
   }, []);
 
   const switchSpace = useCallback((spaceId: string) => {
@@ -818,9 +735,10 @@ function App() {
     if (toIndex < 0 || fromIndex === toIndex) return;
     animateSpaceTransition(toIndex > fromIndex ? 1 : -1, () => {
       setWorkspace((current) => openSpace(current, spaceId));
-      setImportError("");
       setNotice("");
       setIsEditingNote(false);
+      setSelectedWikiPageId(null);
+      setHomeOpen(true);
     });
   }, [
     animateSpaceTransition,
@@ -842,27 +760,20 @@ function App() {
       });
       setNotice("");
       setIsEditingNote(false);
+      setSelectedWikiPageId(null);
+      setHomeOpen(true);
     });
   }, [animateSpaceTransition]);
 
-  const createTab = useCallback(
-    (kind: NoteTab["kind"]) => {
-      const id = makeId(kind === "thread" ? "thread" : "note");
-      const tab: NoteTab =
-        kind === "thread"
-          ? {
-              id,
-              spaceId: workspace.activeSpaceId,
-              title: "New agent thread",
-              kind: "thread",
-            }
-          : {
-              id,
-              spaceId: workspace.activeSpaceId,
-              title: "Untitled note",
-              kind: "markdown",
-              content: "# Untitled note\n\nStart writing here…\n",
-            };
+  const createThread = useCallback(
+    () => {
+      const id = makeId("thread");
+      const tab: NoteTab = {
+        id,
+        spaceId: workspace.activeSpaceId,
+        title: "New agent thread",
+        kind: "thread",
+      };
       setWorkspace((current) => ({
         ...current,
         tabs: [...current.tabs, tab],
@@ -872,17 +783,17 @@ function App() {
           [tab.spaceId]: id,
         },
       }));
-      setImportError("");
       setNotice("");
       setIsEditingNote(false);
-      setWikiOpen(false);
+      setHomeOpen(false);
+      setSelectedWikiPageId(null);
     },
     [workspace.activeSpaceId],
   );
 
   const addWikiSpace = useCallback((space: WikiSpace) => {
     const threadId = makeId("thread");
-    setWorkspace((current) => {
+    commitWorkspace((current) => {
       if (current.spaces.some((existing) => existing.id === space.id)) return current;
       const accent = DEFAULT_SPACES[current.spaces.length % DEFAULT_SPACES.length];
       return {
@@ -906,12 +817,75 @@ function App() {
         lastTabBySpace: { ...current.lastTabBySpace, [space.id]: threadId },
       };
     });
-    setWikiOpen(true);
-  }, []);
+    setHomeOpen(true);
+    setSelectedWikiPageId(null);
+    setIsEditingNote(false);
+    setSidebarRevealed(false);
+  }, [commitWorkspace]);
+
+  useLayoutEffect(() => {
+    ownerRef.current = {
+      read: () => workspaceRef.current,
+      commit: commitWorkspace,
+      isSending: (threadId) => Boolean(pendingRequests.current[threadId]),
+      createSpace: async (name, purpose) => {
+        if (!wikiConnection) throw new Error("The desktop Wiki connection is not ready. Try again.");
+        const { space } = await wikiRequest<{ space: WikiSpace }>(
+          wikiConnection, "/api/wiki/spaces", "POST",
+          { name, ...(purpose ? { purpose } : {}) },
+        );
+        addWikiSpace(space);
+        return space;
+      },
+    };
+  }, [addWikiSpace, commitWorkspace, wikiConnection?.port, wikiConnection?.token]);
+
+  useEffect(() => attachWorkspaceOwner({
+    read: () => ownerRef.current!.read(),
+    commit: (change) => ownerRef.current!.commit(change),
+    createSpace: (name, purpose) => ownerRef.current!.createSpace(name, purpose),
+    isSending: (threadId) => ownerRef.current!.isSending(threadId),
+  }), []);
+
+  useEffect(() => {
+    if (!isDesktopRuntime) return;
+    const next = workspace.tabs.filter(isArchivedThread).map((tab) => ({
+      tab,
+      spaceName: workspace.spaces.find((space) => space.id === tab.spaceId)?.name,
+      messages: workspace.conversations[tab.id],
+      draft: workspace.drafts[tab.id],
+      sending: tab.id in sending,
+    }));
+    const previous = lastArchiveSnapshot.current;
+    lastArchiveSnapshot.current = next;
+    // Typing in an open Thread and progress ticks must not reload the archive
+    // reader. Only its actual metadata, history, draft or pending status changed.
+    if (next.length !== previous.length || next.some((item, index) => {
+      const before = previous[index];
+      return item.tab !== before.tab || item.spaceName !== before.spaceName ||
+        item.messages !== before.messages || item.draft !== before.draft ||
+        item.sending !== before.sending;
+    })) void emit("workspace-archive-changed").catch(() => {});
+  }, [workspace, sending, isDesktopRuntime]);
+
+  const archiveActiveThread = useCallback(() => {
+    if (!activeTab || activeTab.kind !== "thread") return;
+    const archivedAt = Date.now();
+    try {
+      commitWorkspace((current) => archiveThread(current, activeTab.id, archivedAt));
+      // A pending reply still completes into this preserved Thread.
+      setHomeOpen(true);
+      setSelectedWikiPageId(null);
+      setSidebarRevealed(false);
+      setNotice("Thread archived. Its history and draft remain in Thread archive.");
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : String(reason));
+    }
+  }, [activeTab, commitWorkspace]);
 
   const closeTab = useCallback((tabId: string) => {
     const tab = workspace.tabs.find((item) => item.id === tabId);
-    if (!tab || workspace.tabs.filter((item) => item.spaceId === tab.spaceId).length < 2) {
+    if (!tab || !isOpenTab(tab) || openTabsInSpace(workspace.tabs, tab.spaceId).length < 2) {
       return;
     }
     pendingRequests.current[tabId]?.abort();
@@ -926,11 +900,22 @@ function App() {
       delete next[tabId];
       return next;
     });
+    setThreadCommands((current) => {
+      const next = { ...current };
+      delete next[tabId];
+      return next;
+    });
+    setThreadCommandErrors((current) => {
+      const next = { ...current };
+      delete next[tabId];
+      return next;
+    });
     setWorkspace((current) => {
       const closingTab = current.tabs.find((tab) => tab.id === tabId);
       if (
         !closingTab ||
-        current.tabs.filter((tab) => tab.spaceId === closingTab.spaceId).length < 2
+        !isOpenTab(closingTab) ||
+        openTabsInSpace(current.tabs, closingTab.spaceId).length < 2
       ) {
         return current;
       }
@@ -938,10 +923,8 @@ function App() {
       if (!nextTabs.length) return current;
       const nextActive =
         current.activeTabId === tabId
-          ? (nextTabs.find((tab) => tab.spaceId === current.activeSpaceId) ??
-            nextTabs[0])
-          : nextTabs.find((tab) => tab.id === current.activeTabId) ??
-            nextTabs[0];
+          ? openTabsInSpace(nextTabs, current.activeSpaceId)[0]
+          : nextTabs.find((tab) => tab.id === current.activeTabId && isOpenTab(tab));
       const conversations = { ...current.conversations };
       delete conversations[tabId];
       const drafts = { ...current.drafts };
@@ -949,72 +932,23 @@ function App() {
       const lastTabBySpace = { ...current.lastTabBySpace };
       if (lastTabBySpace[closingTab.spaceId] === tabId) {
         const replacement = nextTabs.find(
-          (tab) => tab.spaceId === closingTab.spaceId,
+          (tab) => tab.spaceId === closingTab.spaceId && isOpenTab(tab),
         );
         if (replacement) lastTabBySpace[closingTab.spaceId] = replacement.id;
         else delete lastTabBySpace[closingTab.spaceId];
       }
-      lastTabBySpace[nextActive.spaceId] = nextActive.id;
+      if (nextActive) lastTabBySpace[nextActive.spaceId] = nextActive.id;
       return {
         ...current,
         tabs: nextTabs,
-        activeTabId: nextActive.id,
-        activeSpaceId: nextActive.spaceId,
+        activeTabId: nextActive?.id ?? "",
         lastTabBySpace,
         conversations,
         drafts,
       };
     });
-    setImportError("");
     setIsEditingNote(false);
   }, [workspace.tabs]);
-
-  const importMarkdown = useCallback(
-    async (file?: File) => {
-      if (!file) return;
-      if (!file.name.toLowerCase().endsWith(".md")) {
-        setImportError("Choose a Markdown file ending in .md.");
-        return;
-      }
-      setImportError("");
-      try {
-        const content = await file.text();
-        const title = file.name.replace(/\.md$/i, "").trim() || "Imported note";
-        const tab: NoteTab = {
-          id: makeId("import"),
-          spaceId: workspace.activeSpaceId,
-          title,
-          kind: "markdown",
-          content,
-          imported: true,
-        };
-        setWorkspace((current) => ({
-          ...current,
-          tabs: [...current.tabs, tab],
-          activeTabId: tab.id,
-          lastTabBySpace: {
-            ...current.lastTabBySpace,
-            [tab.spaceId]: tab.id,
-          },
-        }));
-        setNotice(`Imported “${title}” into ${activeSpace.name}.`);
-        setIsEditingNote(false);
-      } catch {
-        setImportError("That file could not be opened. Try another .md file.");
-      }
-    },
-    [activeSpace.name, workspace.activeSpaceId],
-  );
-
-  const handleImportSelection = useCallback(
-    (event: ChangeEvent<HTMLInputElement>) => {
-      const file = event.target.files?.[0];
-      void importMarkdown(file);
-      // Let the same file be selected again after correcting a problem.
-      event.target.value = "";
-    },
-    [importMarkdown],
-  );
 
   const handleThreadKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
@@ -1150,13 +1084,22 @@ function App() {
       event.preventDefault();
       const tab = activeTab;
       const message = draft.trim();
+      if (!tab || tab.kind !== "thread" || !isOpenTab(tab) || !message || pendingRequests.current[tab.id]) return;
+      const parsed = parseThreadCommand(message);
+      if (parsed) {
+        if ("error" in parsed) {
+          setThreadCommandErrors((current) => ({ ...current, [tab.id]: parsed.error }));
+        } else {
+          setThreadCommands((current) => ({
+            ...current, [tab.id]: { ...parsed.command, id: makeId("command") },
+          }));
+          updateDraft(tab.id, "");
+        }
+        return;
+      }
       if (
-        !tab ||
-        tab.kind !== "thread" ||
-        !message ||
         !wikiReady ||
-        agentStatus.state !== "ready" ||
-        pendingRequests.current[tab.id]
+        agentStatus.state !== "ready"
       ) {
         return;
       }
@@ -1181,11 +1124,11 @@ function App() {
       }));
       void sendThreadMessages(tab.id, tab.spaceId, requestMessages, agentStatus);
     },
-    [activeTab, agentStatus, draft, sendThreadMessages, wikiReady, workspace.conversations],
+    [activeTab, agentStatus, draft, sendThreadMessages, updateDraft, wikiReady, workspace.conversations],
   );
 
   const retryMessage = useCallback(() => {
-    if (!activeTab || !wikiReady || agentStatus.state !== "ready") return;
+    if (!activeTab || !isOpenTab(activeTab) || !wikiReady || agentStatus.state !== "ready") return;
     const messages = workspace.conversations[activeTab.id] ?? [];
     if (messages.at(-1)?.role !== "user") return;
     void sendThreadMessages(activeTab.id, activeTab.spaceId, messages, agentStatus);
@@ -1202,23 +1145,20 @@ function App() {
       if (modifier && event.key === ",") {
         event.preventDefault();
         void openSettings();
-      } else if (modifier && event.key.toLowerCase() === "o") {
+      } else if (event.key === "Escape" && !sidebarPinned && sidebarRevealed) {
+        setSidebarRevealed(false);
+        document.querySelector<HTMLButtonElement>(".sidebar-edge-trigger")?.focus();
+      } else if (modifier && event.shiftKey && event.key.toLowerCase() === "s") {
         event.preventDefault();
-        importInputRef.current?.click();
-      } else if (
-        modifier &&
-        !event.shiftKey &&
-        event.key.toLowerCase() === "n"
-      ) {
-        event.preventDefault();
-        createTab("markdown");
+        setSidebarPinned((pinned) => !pinned);
+        setSidebarRevealed(false);
       } else if (
         modifier &&
         event.shiftKey &&
         event.key.toLowerCase() === "n"
       ) {
         event.preventDefault();
-        createTab("thread");
+        createThread();
       } else if (
         !isTextEditing &&
         event.altKey &&
@@ -1237,7 +1177,7 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [createTab, switchSpaceBy]);
+  }, [createThread, switchSpaceBy, sidebarPinned, sidebarRevealed]);
 
   useEffect(() => {
     const sidebar = sidebarRef.current;
@@ -1271,11 +1211,12 @@ function App() {
         event.currentTarget.querySelectorAll<HTMLButtonElement>(
           "[data-tab-button]",
         ),
-      );
+      ).filter((button) => !button.closest("[hidden]"));
       if (!buttons.length) return;
       const currentIndex = buttons.indexOf(
         document.activeElement as HTMLButtonElement,
       );
+      if (currentIndex < 0) return;
       let nextIndex = currentIndex;
       if (event.key === "ArrowDown") nextIndex = (currentIndex + 1) % buttons.length;
       if (event.key === "ArrowUp")
@@ -1288,19 +1229,39 @@ function App() {
     [],
   );
 
-  if (!activeSpace || !activeTab) return null;
+  if (!activeSpace) return null;
 
-  const sendingThisThread = activeTab.id in sending;
+  const sendingThisThread = Boolean(activeTab && activeTab.id in sending);
   const currentProgress =
-    sendingThisThread ? PROGRESS_STEPS[sending[activeTab.id]] : undefined;
-  const currentError = threadErrors[activeTab.id] ??
+    sendingThisThread && activeTab ? PROGRESS_STEPS[sending[activeTab.id]] : undefined;
+  const currentError = (activeTab ? threadErrors[activeTab.id] : undefined) ??
     (!sendingThisThread && activeMessages.at(-1)?.role === "user"
       ? "This message has no reply yet. Retry to ask the agent again."
       : undefined);
+  const sidebarItems: SidebarItem[] = [
+    ...visibleWikiPages.map((page): SidebarItem => ({
+      id: `wiki-${page.id}`,
+      title: page.title,
+      kind: "page",
+      current: !homeOpen && activeWikiPage?.id === page.id,
+      onSelect: () => openWikiPage(page),
+    })),
+    ...visibleTabs.map((tab): SidebarItem => ({
+      id: tab.id,
+      title: tab.title,
+      kind: tab.kind === "thread" ? "thread" : "page",
+      current: !homeOpen && !activeWikiPage && activeTab?.id === tab.id,
+      local: tab.kind === "markdown",
+      imported: tab.imported,
+      onSelect: () => selectTab(tab),
+      onClose: () => closeTab(tab.id),
+      closeDisabled: visibleTabs.length <= 1,
+    })),
+  ];
 
   return (
     <main
-      className="app-shell"
+      className={`app-shell${sidebarPinned ? "" : " is-sidebar-hidden"}${isDesktopRuntime ? " is-tauri" : ""}`}
       style={
         {
           "--space-accent": activeSpace.color,
@@ -1308,7 +1269,47 @@ function App() {
         } as CSSProperties
       }
     >
-      <aside ref={sidebarRef} className="sidebar">
+      {!sidebarPinned && (
+        <button
+          className="sidebar-edge-trigger"
+          type="button"
+          aria-label="Reveal sidebar"
+          aria-expanded={sidebarRevealed}
+          aria-controls="workspace-sidebar"
+          onPointerEnter={() => setSidebarRevealed(true)}
+          onClick={() => {
+            if (sidebarRevealed) {
+              sidebarFocusRequest.current = null;
+              sidebarRef.current?.querySelector<HTMLButtonElement>(".sidebar-toggle")?.focus();
+            } else {
+              sidebarFocusRequest.current = "sidebar";
+              setSidebarRevealed(true);
+            }
+          }}
+        />
+      )}
+      <aside
+        id="workspace-sidebar"
+        ref={sidebarRef}
+        className={`sidebar${sidebarPinned ? "" : " is-overlay"}${sidebarRevealed ? " is-revealed" : ""}`}
+        inert={!sidebarPinned && !sidebarRevealed}
+        onPointerLeave={() => {
+          if (!sidebarPinned && !sidebarRef.current?.contains(document.activeElement)) {
+            setSidebarRevealed(false);
+          }
+        }}
+        onBlur={(event) => {
+          if (!sidebarPinned && !event.currentTarget.contains(event.relatedTarget) &&
+            !event.currentTarget.matches(":hover")) setSidebarRevealed(false);
+        }}
+        onClick={(event) => {
+          const target = event.target as HTMLElement;
+          if (!sidebarPinned && target.closest(".tab-button, .pinned-thread-action, .space-dot-button, .sidebar-window-action")) {
+            if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+            setSidebarRevealed(false);
+          }
+        }}
+      >
         <div
           className={`titlebar-drag-region ${isDesktopRuntime ? "is-tauri" : "is-browser"}`}
         />
@@ -1332,103 +1333,65 @@ function App() {
             >
               <Settings aria-hidden="true" />
             </button>
+            <button
+              className="icon-button sidebar-toggle"
+              type="button"
+              aria-label={sidebarPinned ? "Hide sidebar" : "Show sidebar"}
+              title={sidebarPinned ? "Hide sidebar" : "Show sidebar"}
+              onClick={() => {
+                sidebarFocusRequest.current = sidebarPinned ? "edge" : "sidebar";
+                setSidebarPinned((pinned) => !pinned);
+                setSidebarRevealed(false);
+              }}
+            >
+              {sidebarPinned ? <PanelLeftClose aria-hidden="true" /> : <PanelLeftOpen aria-hidden="true" />}
+            </button>
           </div>
 
           <div className="nav-separator" />
 
-          <div className="section-heading">
-            <span className="section-title">PAGES</span>
-            <span className="tab-count">{visibleTabs.length}</span>
+          <div className="current-space-card" aria-live="polite">
+            <span className="current-space-icon">
+              <SpaceIcon icon={activeSpace.icon} />
+            </span>
+            <span className="current-space-copy">
+              <strong>{activeSpace.name}</strong>
+              <small>{activeSpace.subtitle}</small>
+            </span>
           </div>
-          <nav
-            className="tab-list"
-            aria-label={`Pages in ${activeSpace.name}`}
+          <SidebarNavigation
+            spaceId={activeSpace.id}
+            spaceName={activeSpace.name}
+            homeCurrent={homeOpen}
+            items={sidebarItems}
+            onHome={openHome}
+            onNewThread={createThread}
             onKeyDown={handleTabListKeyDown}
-          >
-            {visibleTabs.map((tab) => {
-              const isActive = activeTab.id === tab.id;
-              return (
-                <div
-                  className={`tab-row ${isActive ? "is-current" : ""}`}
-                  key={tab.id}
-                >
-                  <button
-                    type="button"
-                    className="tab-button"
-                    data-tab-button
-                    aria-current={isActive ? "page" : undefined}
-                    onClick={() => selectTab(tab)}
-                  >
-                    <span className={`tab-icon ${tab.kind === "thread" ? "is-thread" : ""}`}>
-                      <TabIcon tab={tab} />
-                    </span>
-                    <span className="tab-title">{tab.title}</span>
-                    {tab.imported && (
-                      <span className="import-indicator" title="Imported file">
-                        <Check aria-hidden="true" />
-                      </span>
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    className="tab-close"
-                    aria-label={`Close ${tab.title}`}
-                    title={
-                      visibleTabs.length <= 1
-                        ? "Keep at least one page in this Space"
-                        : `Close ${tab.title}`
-                    }
-                    disabled={visibleTabs.length <= 1}
-                    onClick={() => closeTab(tab.id)}
-                  >
-                    <X aria-hidden="true" />
-                  </button>
-                </div>
-              );
-            })}
-          </nav>
-
-          <div className="sidebar-actions">
-            <button
-              className="side-action"
-              type="button"
-              onClick={() => createTab("markdown")}
-            >
-              <FilePlus2 aria-hidden="true" />
-              <span>New note</span>
-              <kbd>⌘ N</kbd>
-            </button>
-            <button
-              className="side-action"
-              type="button"
-              onClick={() => createTab("thread")}
-            >
-              <MessageCircle aria-hidden="true" />
-              <span>New thread</span>
-              <kbd>⌘ ⇧ N</kbd>
-            </button>
-            <button
-              className="side-action"
-              type="button"
-              aria-pressed={wikiOpen}
-              onClick={() => setWikiOpen(true)}
-            >
-              <BookOpen aria-hidden="true" />
-              <span>Space Wiki</span>
-            </button>
-            <button
-              className="side-action"
-              type="button"
-              title="Import as a local note; use Space Wiki to add a Source"
-              onClick={() => importInputRef.current?.click()}
-            >
-              <Plus aria-hidden="true" />
-              <span>Import Markdown</span>
-              <kbd>⌘ O</kbd>
-            </button>
-          </div>
+          />
 
           <div className="sidebar-footer">
+            <div className="sidebar-window-actions">
+              <button
+                className="side-action sidebar-window-action"
+                type="button"
+                aria-label="New Space"
+                title="New Space"
+                onClick={() => void openSpaceSettings().catch((reason) => setNotice(String(reason)))}
+              >
+                <span className="tab-icon"><Plus aria-hidden="true" /></span>
+                <span>New Space</span>
+              </button>
+              <button
+                className="side-action sidebar-window-action"
+                type="button"
+                aria-label="Thread archive"
+                title="Thread archive"
+                onClick={() => void openThreadArchive().catch((reason) => setNotice(String(reason)))}
+              >
+                <span className="tab-icon"><Archive aria-hidden="true" /></span>
+                <span>Thread archive</span>
+              </button>
+            </div>
             <div className="storage-indicator">
               <span className="storage-dot" />
               <span>Saved on this device</span>
@@ -1452,15 +1415,6 @@ function App() {
                 ))}
               </nav>
             </div>
-            <div className="current-space-card" aria-live="polite">
-              <span className="current-space-icon">
-                <SpaceIcon icon={activeSpace.icon} />
-              </span>
-              <span className="current-space-copy">
-                <strong>{activeSpace.name}</strong>
-                <small>{activeSpace.subtitle}</small>
-              </span>
-            </div>
           </div>
         </div>
       </aside>
@@ -1475,7 +1429,7 @@ function App() {
             />
             <span className="breadcrumb-space">{activeSpace.name}</span>
             <span className="breadcrumb-slash">/</span>
-            <span className="breadcrumb-page">{wikiOpen ? "Wiki" : activeTab.title}</span>
+            <span className="breadcrumb-page">{homeOpen || !activeDocument ? "Home Page" : activeDocument.title}</span>
           </div>
           <div className="topbar-actions">
             <span className="save-status">
@@ -1544,7 +1498,7 @@ function App() {
           ref={contentScrollRef}
           className={`content-scroll${spaceTransition ? ` space-transition-${spaceTransition.phase}` : ""}`}
           onScroll={(event) => {
-            if (wikiOpen || activeTab.kind !== "thread") return;
+            if (homeOpen || activeWikiPage || activeTab?.kind !== "thread") return;
             const scroll = event.currentTarget;
             shouldFollowThread.current =
               scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 96;
@@ -1555,18 +1509,14 @@ function App() {
             } as CSSProperties
           }
         >
-          {(notice || importError) && (
-            <div
-              className={`notice-banner ${importError ? "is-error" : ""}`}
-              role={importError ? "alert" : "status"}
-            >
-              <span>{importError || notice}</span>
+          {notice && (
+            <div className="notice-banner" role="status">
+              <span>{notice}</span>
               <button
                 type="button"
                 aria-label="Dismiss message"
                 onClick={() => {
                   setNotice("");
-                  setImportError("");
                 }}
               >
                 <X aria-hidden="true" />
@@ -1574,15 +1524,23 @@ function App() {
             </div>
           )}
 
-          {wikiOpen ? (
-            <WikiPanel
+          {homeOpen || !activeDocument ? (
+            <SpaceHome
               key={activeSpace.id}
+              space={activeSpace}
               connection={wikiConnection}
-              spaceId={activeSpace.id}
-              spaceName={activeSpace.name}
-              onSpaceCreated={addWikiSpace}
+              contentState={visibleWikiState}
+              onRetryContent={retryWikiContent}
+              threads={visibleTabs.filter((tab) => tab.kind === "thread")}
+              localTabCount={visibleTabs.filter((tab) => tab.kind === "markdown").length}
+              onOpenPage={openWikiPage}
+              onOpenThread={(threadId) => {
+                const tab = visibleTabs.find((item) => item.id === threadId && item.kind === "thread");
+                if (tab) selectTab(tab);
+              }}
+              onNewThread={createThread}
             />
-          ) : activeTab.kind === "thread" ? (
+          ) : !activeWikiPage && activeTab?.kind === "thread" ? (
             <section className="thread-page" aria-labelledby="thread-title">
               <div className="thread-header">
                 <div className="thread-kicker">
@@ -1594,6 +1552,10 @@ function App() {
                   <span>LOCAL HISTORY</span>
                 </div>
                 <h1 id="thread-title">{activeTab.title}</h1>
+                <button className="archive-thread-button" type="button" aria-label="Archive thread" onClick={archiveActiveThread}>
+                  <Archive aria-hidden="true" />
+                  <span>Archive thread</span>
+                </button>
                 <p>
                   A quiet place to think something through. Conversations stay
                   with this workspace.
@@ -1611,7 +1573,7 @@ function App() {
               </div>
 
               <div className="conversation" aria-live="polite">
-                {activeMessages.length === 0 && (
+                {activeMessages.length === 0 && !activeThreadCommand && (
                   <div className="thread-empty">
                     <div className="empty-orbit" aria-hidden="true">
                       <span />
@@ -1621,7 +1583,7 @@ function App() {
                     <h2>What’s on your mind?</h2>
                     <p>
                       Ask a question, bring a half-formed thought, or work
-                      through a first draft together.
+                      through a first draft together. Type / for local Wiki commands.
                     </p>
                     <div className="prompt-suggestions" aria-label="Ideas to get started">
                       <button
@@ -1732,12 +1694,60 @@ function App() {
                     )}
                   </div>
                 )}
+                {activeThreadCommand && (
+                  <section className="thread-command-card" aria-label="Local Thread tool">
+                    <div className="thread-command-heading">
+                      <code>/{activeThreadCommand.name}</code>
+                      <span>{activeSpace.name} · local action</span>
+                      <button type="button" className="icon-button" aria-label="Close Thread tool" onClick={() => {
+                        setThreadCommands((current) => {
+                          const next = { ...current };
+                          delete next[activeTab.id];
+                          return next;
+                        });
+                      }}><X aria-hidden="true" /></button>
+                    </div>
+                    {activeThreadCommand.name === "help" ? (
+                      <div className="thread-command-help" data-tool-command="help">
+                        <p>Run commands with {navigator.platform.startsWith("Mac") ? "⌘" : "Ctrl+"} Enter or the Run command button. They are not sent to the model.</p>
+                        {THREAD_COMMANDS.map((command) => (
+                          <p key={command.name}><code>/{command.name}</code> — {command.description}</p>
+                        ))}
+                        <p><code>/ingest https://example.com/article</code> prefills a URL for review before capture. Confirm this Thread’s Space after capture.</p>
+                      </div>
+                    ) : (
+                      <ThreadWikiTools
+                        key={activeThreadCommand.id}
+                        command={activeThreadCommand.name}
+                        initialUrl={activeThreadCommand.initialUrl}
+                        connection={wikiConnection}
+                        spaceId={activeTab.spaceId}
+                        spaceName={activeSpace.name}
+                      />
+                    )}
+                  </section>
+                )}
+                {threadCommandErrors[activeTab.id] && (
+                  <p className="thread-command-error" role="alert">{threadCommandErrors[activeTab.id]}</p>
+                )}
                 <div className="message-row from-user is-draft">
                   <ThreadAvatar kind="user" src={avatarDataUrl} />
                   <div className="message-body">
                     <div className="message-author">
                       <strong>{profileName}</strong>
                     </div>
+                    {commandSuggestions.length > 0 && (
+                      <nav className="thread-command-picker" aria-label="Thread commands">
+                        {commandSuggestions.map((command) => (
+                          <button key={command.name} type="button" onClick={() => {
+                            updateDraft(activeTab.id, `/${command.name}`);
+                            composerInputRef.current?.focus();
+                          }}>
+                            <code>/{command.name}</code><span>{command.description}</span>
+                          </button>
+                        ))}
+                      </nav>
+                    )}
                     <form className="message-bubble inline-composer" onSubmit={submitMessage}>
                       <label className="sr-only" htmlFor="agent-message">
                         Message the local agent
@@ -1750,30 +1760,30 @@ function App() {
                         onKeyDown={handleThreadKeyDown}
                         placeholder={
                           isReady
-                            ? "Write a message…"
-                            : "Agent is unavailable in this window"
+                            ? "Write a message, or / for commands…"
+                            : "Type / for local Wiki commands. Configure Settings to ask the agent."
                         }
                         rows={1}
                         maxLength={MAX_CONTENT_CHARS}
-                        disabled={!isReady || sendingThisThread}
+                        disabled={sendingThisThread}
                       />
                       <div className="inline-composer-footer">
                         <span>
-                          {navigator.platform.startsWith("Mac") ? "⌘" : "Ctrl+"} Enter to send
+                          {navigator.platform.startsWith("Mac") ? "⌘" : "Ctrl+"} Enter to {isCommandDraft ? "run" : "send"}
                           <span aria-hidden="true"> · </span>
-                          Sent to OpenRouter
+                          {isCommandDraft ? "Local command · not sent to model" : "Messages sent to OpenRouter"}
                         </span>
                         <button
                           className="send-button"
                           type="submit"
-                          disabled={!isReady || !draft.trim() || sendingThisThread}
+                          disabled={(!isCommandDraft && !isReady) || !draft.trim() || sendingThisThread}
                         >
                           {sendingThisThread ? (
                             <LoaderCircle className="spin-icon" aria-hidden="true" />
                           ) : (
                             <Send aria-hidden="true" />
                           )}
-                          <span>{sendingThisThread ? "Sending" : "Send"}</span>
+                          <span>{sendingThisThread ? "Sending" : isCommandDraft ? "Run command" : "Send"}</span>
                         </button>
                       </div>
                     </form>
@@ -1784,17 +1794,17 @@ function App() {
           ) : (
             <article
               className={`note-page ${readingWidth === "wide" ? "is-wide" : ""}`}
-              aria-label={activeTab.title}
+              aria-label={activeDocument.title}
             >
               <div className="note-meta">
                 <span className="note-meta-icon">
                   <FileText aria-hidden="true" />
                 </span>
-                <span>{activeTab.imported ? "IMPORTED MARKDOWN" : "NOTE"}</span>
+                <span>{activeWikiPage ? "WIKI PAGE" : activeTab?.imported ? "IMPORTED MARKDOWN" : "LOCAL NOTE"}</span>
                 <span className="meta-divider">·</span>
                 <span>{activeSpace.name.toUpperCase()}</span>
                 <span className="meta-spacer" />
-                {!activeTab.imported && (
+                {!activeWikiPage && activeTab && !activeTab.imported && (
                   <button
                     className="note-edit-button"
                     type="button"
@@ -1804,9 +1814,9 @@ function App() {
                     {isEditingNote ? "Preview" : "Edit note"}
                   </button>
                 )}
-                {activeTab.imported && <span className="local-file-badge">LOCAL FILE</span>}
+                {!activeWikiPage && activeTab?.imported && <span className="local-file-badge">LOCAL FILE</span>}
               </div>
-              {isEditingNote ? (
+              {!activeWikiPage && activeTab && isEditingNote ? (
                 <textarea
                   className="note-editor"
                   aria-label={`Edit ${activeTab.title}`}
@@ -1827,7 +1837,7 @@ function App() {
                     remarkPlugins={[remarkGfm]}
                     components={markdownComponents}
                   >
-                    {activeTab.content ?? ""}
+                    {activeDocument.content ?? ""}
                   </ReactMarkdown>
                 </div>
               )}
@@ -1838,10 +1848,6 @@ function App() {
               </div>
               <div className="note-endnote">
                 <span>That’s everything for now.</span>
-                <button type="button" onClick={() => createTab("markdown")}>
-                  <Plus aria-hidden="true" />
-                  New note
-                </button>
               </div>
             </article>
           )}
@@ -1849,14 +1855,6 @@ function App() {
 
       </section>
 
-      <input
-        ref={importInputRef}
-        className="sr-only"
-        type="file"
-        accept=".md,text/markdown,text/plain"
-        aria-label="Choose a Markdown file to import"
-        onChange={handleImportSelection}
-      />
     </main>
   );
 }

@@ -1,0 +1,11 @@
+{
+  "results": [
+    {
+      "url": "https://example.com/borealis/guide",
+      "final_url": "https://example.com/borealis/guide/v2",
+      "title": "Borealis cooling operations guide",
+      "text": "# Borealis cooling operations guide\n\nKeep the pilot at 10% for 24 hours. If p95 latency exceeds 80 ms for ten minutes, pause expansion and investigate.\n\n## Operator checklist\n\n1. Check the 1,200-request audit sample.\n2. Record the latency window.\n3. Request human approval before expanding traffic.\n"
+    }
+  ],
+  "errors": []
+}

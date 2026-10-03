@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { ChangeEvent, FormEvent } from "react";
 import {
   wikiRequest,
@@ -6,16 +12,17 @@ import {
   type WikiPage,
   type WikiQueryResult,
   type WikiSource,
-  type WikiSpace,
   type WikiSuggestion,
 } from "./wikiClient";
+import { wikiContentStore } from "./wikiContentStore";
 import "./wikiPanel.css";
 
 type PanelProps = {
   connection?: WikiConnection;
   spaceId: string;
   spaceName: string;
-  onSpaceCreated: (space: WikiSpace) => void;
+  command: "ingest" | "wiki";
+  initialUrl?: string;
 };
 
 function readBase64(file: File): Promise<string> {
@@ -31,17 +38,20 @@ function readBase64(file: File): Promise<string> {
   });
 }
 
-export function WikiPanel({ connection, spaceId, spaceName, onSpaceCreated }: PanelProps) {
-  const [spaces, setSpaces] = useState<WikiSpace[]>([]);
-  const [sources, setSources] = useState<WikiSource[]>([]);
+export function ThreadWikiTools({
+  connection, spaceId, spaceName, command, initialUrl,
+}: PanelProps) {
+  const contentSnapshot = useSyncExternalStore(
+    wikiContentStore.subscribe,
+    wikiContentStore.getSnapshot,
+    wikiContentStore.getSnapshot,
+  )[spaceId];
+  const sources = contentSnapshot?.content?.sources ?? [];
+  const pages = contentSnapshot?.content?.pages ?? [];
   const [unassigned, setUnassigned] = useState<WikiSource[]>([]);
-  const [pages, setPages] = useState<WikiPage[]>([]);
   const [pending, setPending] = useState<WikiSource | null>(null);
   const [suggestions, setSuggestions] = useState<WikiSuggestion[]>([]);
-  const [targetSpace, setTargetSpace] = useState(spaceId);
-  const [spaceTitle, setSpaceTitle] = useState("");
-  const [spacePurpose, setSpacePurpose] = useState("");
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(initialUrl ?? "");
   const [allowOcr, setAllowOcr] = useState(false);
   const [pageTitle, setPageTitle] = useState("");
   const [selectedPage, setSelectedPage] = useState<WikiPage | null>(null);
@@ -57,40 +67,74 @@ export function WikiPanel({ connection, spaceId, spaceName, onSpaceCreated }: Pa
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const workInFlight = useRef(false);
+  const loadGeneration = useRef(0);
+  const contentReadRef = useRef<ReturnType<typeof wikiContentStore.beginRead> | null>(null);
+  const mountedRef = useRef(false);
+  const contextRef = useRef({
+    port: connection?.port,
+    token: connection?.token,
+    spaceId,
+  });
+  contextRef.current = { port: connection?.port, token: connection?.token, spaceId };
 
   const load = useCallback(async () => {
+    const context = { port: connection?.port, token: connection?.token, spaceId };
+    const isCurrentContext = () =>
+      mountedRef.current &&
+      contextRef.current.port === context.port &&
+      contextRef.current.token === context.token &&
+      contextRef.current.spaceId === context.spaceId;
+    if (!isCurrentContext()) return;
+
+    const generation = ++loadGeneration.current;
+    contentReadRef.current?.cancel();
+    contentReadRef.current = null;
+    setError("");
     if (!connection) return;
-    // Register the legacy Space identity, not its old localStorage notes.
-    await wikiRequest(connection, "/api/wiki/spaces/ensure", "POST", {
-      id: spaceId,
-      name: spaceName,
-    });
-    const [content, allSpaces, pendingSources] = await Promise.all([
-      wikiRequest<{ sources: WikiSource[]; pages: WikiPage[] }>(
-        connection, `/api/wiki/spaces/${spaceId}/content`,
-      ),
-      wikiRequest<{ spaces: WikiSpace[] }>(connection, "/api/wiki/spaces"),
-      wikiRequest<{ sources: WikiSource[] }>(
+
+    try {
+      // Register the legacy Space identity, not its old localStorage notes.
+      await wikiRequest(connection, "/api/wiki/spaces/ensure", "POST", {
+        id: spaceId,
+        name: spaceName,
+      });
+      if (generation !== loadGeneration.current || !isCurrentContext()) return;
+
+      const contentRead = wikiContentStore.beginRead(connection, spaceId);
+      contentReadRef.current = contentRead;
+      void contentRead.promise.then(() => {
+        if (contentReadRef.current === contentRead) contentReadRef.current = null;
+      });
+      const pendingSources = await wikiRequest<{ sources: WikiSource[] }>(
         connection, "/api/wiki/sources/unassigned",
-      ),
-    ]);
-    setSources(content.sources);
-    setPages(content.pages);
-    setSpaces(allSpaces.spaces);
-    setUnassigned(pendingSources.sources);
+      );
+      if (generation !== loadGeneration.current || !isCurrentContext()) return;
+      setUnassigned(pendingSources.sources);
+    } catch (reason) {
+      if (generation === loadGeneration.current && isCurrentContext()) {
+        setError(reason instanceof Error ? reason.message : "The Wiki could not be loaded.");
+      }
+    }
   }, [connection?.port, connection?.token, spaceId, spaceName]);
 
   useEffect(() => {
-    setTargetSpace(spaceId);
+    mountedRef.current = true;
     setSelectedPage(null);
     setSelectedSource(null);
     setResults([]);
-    void load().catch((reason) => setError(
-      reason instanceof Error ? reason.message : "The Wiki could not be loaded.",
-    ));
+    void load();
+    return () => {
+      mountedRef.current = false;
+      loadGeneration.current += 1;
+      contentReadRef.current?.cancel(true);
+      contentReadRef.current = null;
+    };
   }, [load, spaceId]);
 
   async function perform(work: () => Promise<void>) {
+    if (workInFlight.current) return;
+    workInFlight.current = true;
     setBusy(true);
     setError("");
     setNotice("");
@@ -99,6 +143,7 @@ export function WikiPanel({ connection, spaceId, spaceName, onSpaceCreated }: Pa
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The Wiki operation failed.");
     } finally {
+      workInFlight.current = false;
       setBusy(false);
     }
   }
@@ -125,10 +170,10 @@ export function WikiPanel({ connection, spaceId, spaceName, onSpaceCreated }: Pa
         source: WikiSource;
         suggestions: WikiSuggestion[];
       }>(connection, "/api/wiki/sources", "POST", data);
+      wikiContentStore.invalidate(spaceId);
       setPending(imported.source);
       setSuggestions(imported.suggestions);
-      setTargetSpace(spaceId);
-      setNotice("Source captured. Confirm one Space before it becomes searchable.");
+      setNotice(`Source captured. Confirm ${spaceName} before it becomes searchable.`);
       await load();
     });
   }
@@ -143,11 +188,11 @@ export function WikiPanel({ connection, spaceId, spaceName, onSpaceCreated }: Pa
       }>(connection, "/api/wiki/sources", "POST", {
         kind: "url", url: url.trim(),
       });
+      wikiContentStore.invalidate(spaceId);
       setPending(imported.source);
       setSuggestions(imported.suggestions);
-      setTargetSpace(spaceId);
       setUrl("");
-      setNotice("Page captured. Confirm its Space before it becomes searchable.");
+      setNotice(`Source captured. Confirm ${spaceName} before it becomes searchable.`);
       await load();
     });
   }
@@ -160,7 +205,6 @@ export function WikiPanel({ connection, spaceId, spaceName, onSpaceCreated }: Pa
       );
       setPending(source);
       setSuggestions(response.suggestions);
-      setTargetSpace(spaceId);
     });
   }
 
@@ -168,29 +212,13 @@ export function WikiPanel({ connection, spaceId, spaceName, onSpaceCreated }: Pa
     if (!connection || !pending) return;
     await perform(async () => {
       await wikiRequest(connection, `/api/wiki/sources/${pending.id}/assign`, "POST", {
-        spaceId: targetSpace,
+        spaceId,
       });
-      setNotice(`Source assigned to ${spaces.find((space) => space.id === targetSpace)?.name ?? targetSpace}.`);
+      wikiContentStore.invalidate(spaceId);
+      setNotice(`Source assigned to ${spaceName}.`);
       setPending(null);
       setSuggestions([]);
       await load();
-    });
-  }
-
-  async function createSpace(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!connection || !spaceTitle.trim()) return;
-    await perform(async () => {
-      const response = await wikiRequest<{ space: WikiSpace }>(
-        connection, "/api/wiki/spaces", "POST", {
-          name: spaceTitle.trim(),
-          ...(spacePurpose.trim() ? { purpose: spacePurpose.trim() } : {}),
-        },
-      );
-      setSpaceTitle("");
-      setSpacePurpose("");
-      onSpaceCreated(response.space);
-      setNotice(`Created ${response.space.name}. No old notes were enrolled.`);
     });
   }
 
@@ -204,6 +232,7 @@ export function WikiPanel({ connection, spaceId, spaceName, onSpaceCreated }: Pa
           spaceId, title, content: `# ${title}\n\nStart writing here…\n`,
         },
       );
+      wikiContentStore.invalidate(spaceId);
       setPageTitle("");
       setSelectedPage(response.page);
       setDraft(response.page.content);
@@ -220,6 +249,7 @@ export function WikiPanel({ connection, spaceId, spaceName, onSpaceCreated }: Pa
           spaceId, content: draft, sourceIds: selectedSources,
         },
       );
+      wikiContentStore.invalidate(spaceId);
       setSelectedPage(response.page);
       setNotice("Wiki page saved.");
       await load();
@@ -267,25 +297,27 @@ export function WikiPanel({ connection, spaceId, spaceName, onSpaceCreated }: Pa
   }
 
   return (
-    <section className="wiki-panel" aria-label={`Wiki in ${spaceName}`}>
+    <section className="wiki-panel thread-wiki-tools" data-tool-command={command} aria-label={`/${command} in ${spaceName}`}>
       <header className="wiki-panel-heading">
-        <span className="wiki-eyebrow">SPACE KNOWLEDGE</span>
-        <h1>{spaceName} Wiki</h1>
-        <p>Sources and Pages in this Space are available to its Agent Threads. Older local tabs stay separate until you explicitly add them.</p>
+        <span className="wiki-eyebrow">LOCAL THREAD COMMAND · /{command}</span>
+        <h2>{command === "ingest" ? "Capture sources" : "Space knowledge"}</h2>
+        <p>Scope: <strong>{spaceName}</strong>. Commands run locally, without sending a message to the model. Old local tabs are not Wiki evidence.</p>
       </header>
       {!connection && <p role="status">Wiki files are available in the desktop app when its local sidecar is connected.</p>}
       {error && <p className="wiki-feedback is-error" role="alert">{error}</p>}
+      {contentSnapshot?.error && <p className="wiki-feedback is-error" role="alert">{contentSnapshot.error}</p>}
       {notice && <p className="wiki-feedback" role="status">{notice}</p>}
-      <div className="wiki-panel-grid">
+      <div className={`wiki-panel-grid ${command === "ingest" ? "is-ingest" : ""}`}>
         <section className="wiki-card">
           <h2>Sources <small>{sources.length}</small></h2>
+          {command === "ingest" && <>
           <p>Capture first, then confirm one Space. Importing never edits a Page.</p>
           <label className="wiki-file-label">
             Import Markdown or PDF
             <input aria-label="Import Wiki Source file" type="file" accept=".md,.pdf,application/pdf,text/markdown" disabled={!connection || busy} onChange={(event) => void importSource(event)} />
           </label>
           <label className="wiki-ocr-label">
-            <input type="checkbox" checked={allowOcr} onChange={(event) => setAllowOcr(event.target.checked)} />
+            <input type="checkbox" checked={allowOcr} disabled={busy} onChange={(event) => setAllowOcr(event.target.checked)} />
             Try OCR when a PDF has no text layer (under 100 pages)
           </label>
           <form className="wiki-inline-form" onSubmit={(event) => void importUrl(event)}>
@@ -298,34 +330,30 @@ export function WikiPanel({ connection, spaceId, spaceName, onSpaceCreated }: Pa
             <div className="wiki-source-list">
               <h3>Waiting for a Space</h3>
               {unassigned.map((source) => (
-                <button key={source.id} type="button" disabled={busy} onClick={() => void selectUnassigned(source)}>
+                <button key={source.id} type="button" data-source-id={source.id} disabled={busy} onClick={() => void selectUnassigned(source)}>
                   {source.title} <small>Assign</small>
                 </button>
               ))}
             </div>
           )}
           {pending && (
-            <div className="wiki-assignment" aria-label="Confirm Source Space">
+            <div className="wiki-assignment" data-source-id={pending.id} aria-label="Confirm Source Space">
               <strong>Assign “{pending.title}”</strong>
-              <label htmlFor="wiki-target-space">Space</label>
-              <select id="wiki-target-space" value={targetSpace} onChange={(event) => setTargetSpace(event.target.value)}>
-                {spaces.map((space) => (
-                  <option key={space.id} value={space.id}>
-                    {space.name}{suggestions.find((item) => item.space.id === space.id && item.score > 0) ? " · suggested" : ""}
-                  </option>
-                ))}
-              </select>
-              <button type="button" disabled={busy || !targetSpace} onClick={() => void assign()}>Confirm one Space</button>
+              <p id="wiki-target-space">This Thread belongs to <strong>{spaceName}</strong>.</p>
+              <small>Suggested Spaces: {suggestions.filter((item) => item.score > 0).map((item) => item.space.name).join(", ") || "none"}. To assign elsewhere, open a Thread in that Space.</small>
+              <button type="button" disabled={!connection || busy} onClick={() => void assign()}>Confirm one Space</button>
             </div>
           )}
+          </>}
           <div className="wiki-source-list">
             {sources.map((source) => (
-              <button key={source.id} type="button" onClick={() => void showSource(source)}>
+              <button key={source.id} type="button" disabled={busy} onClick={() => void showSource(source)}>
                 {source.title} <small>{source.kind}</small>
               </button>
             ))}
           </div>
         </section>
+        {command === "wiki" &&
         <section className="wiki-card">
           <h2>Pages <small>{pages.length}</small></h2>
           <p>Pages are maintained knowledge. Add citations to Sources in this Space.</p>
@@ -336,7 +364,7 @@ export function WikiPanel({ connection, spaceId, spaceName, onSpaceCreated }: Pa
           </form>
           <div className="wiki-source-list">
             {pages.map((page) => (
-              <button key={page.id} type="button" onClick={() => {
+              <button key={page.id} type="button" disabled={busy} onClick={() => {
                 setSelectedPage(page);
                 setSelectedSource(null);
                 setDraft(page.content);
@@ -344,7 +372,7 @@ export function WikiPanel({ connection, spaceId, spaceName, onSpaceCreated }: Pa
               }}>{page.title} <small>{page.sourceIds.length} sources</small></button>
             ))}
           </div>
-        </section>
+        </section>}
       </div>
       {selectedSource && (
         <section className="wiki-card wiki-detail">
@@ -374,7 +402,7 @@ export function WikiPanel({ connection, spaceId, spaceName, onSpaceCreated }: Pa
           <button type="button" disabled={!connection || busy || !draft.trim()} onClick={() => void savePage()}>Save Page and citations</button>
         </section>
       )}
-      <section className="wiki-card wiki-detail">
+      {command === "wiki" && <section className="wiki-card wiki-detail">
         <h2>Search this Space</h2>
         <form className="wiki-inline-form" onSubmit={(event) => void search(event)}>
           <label htmlFor="wiki-query">Question or keywords</label>
@@ -388,17 +416,7 @@ export function WikiPanel({ connection, spaceId, spaceName, onSpaceCreated }: Pa
         ))}
         <button type="button" disabled={!connection || busy} onClick={() => void lint()}>Check links and Sources</button>
         {lintIssues.map((issue, index) => <p key={`${issue}-${index}`} role="status">{issue}</p>)}
-      </section>
-      <section className="wiki-card wiki-detail">
-        <h2>Another knowledge range</h2>
-        <form className="wiki-inline-form" onSubmit={(event) => void createSpace(event)}>
-          <label htmlFor="wiki-new-space">New Space name</label>
-          <input id="wiki-new-space" value={spaceTitle} maxLength={200} disabled={!connection || busy} onChange={(event) => setSpaceTitle(event.target.value)} />
-          <label htmlFor="wiki-space-purpose">Purpose (used for Source suggestions)</label>
-          <input id="wiki-space-purpose" value={spacePurpose} maxLength={2000} disabled={!connection || busy} onChange={(event) => setSpacePurpose(event.target.value)} />
-          <button type="submit" disabled={!connection || busy || !spaceTitle.trim()}>Create Space</button>
-        </form>
-      </section>
+      </section>}
     </section>
   );
 }

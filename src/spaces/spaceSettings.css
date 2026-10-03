@@ -1,0 +1,229 @@
+.space-settings-shell {
+  box-sizing: border-box;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  gap: 28px;
+  padding: 52px clamp(24px, 7vw, 56px) 42px;
+  overflow-y: auto;
+  color: #272731;
+  background:
+    radial-gradient(ellipse at 10% 0%, rgba(126, 142, 216, 0.13), transparent 42%),
+    linear-gradient(180deg, #f8f7f5 0%, #f3f2ef 100%);
+}
+
+.space-settings-heading {
+  max-width: 580px;
+}
+
+.space-settings-kicker {
+  display: block;
+  color: #777683;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+}
+
+.space-settings-heading h1 {
+  margin: 12px 0 10px;
+  color: #292833;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(32px, 6vw, 42px);
+  font-weight: 400;
+  letter-spacing: -0.045em;
+  line-height: 1.08;
+}
+
+.space-settings-heading > p {
+  max-width: 510px;
+  margin: 0;
+  color: #6f6e76;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.space-settings-desktop-only {
+  box-sizing: border-box;
+  max-width: 580px;
+  margin: -8px 0 0;
+  padding: 11px 14px;
+  border: 1px solid #d9d5ca;
+  border-radius: 10px;
+  color: #55535c;
+  background: rgba(255, 255, 255, 0.56);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.space-settings-form {
+  display: flex;
+  width: 100%;
+  max-width: 580px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 22px;
+}
+
+.space-settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: #3c3b45;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.space-settings-field input,
+.space-settings-field textarea {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid #d8d6d2;
+  border-radius: 9px;
+  outline: none;
+  padding: 11px 13px;
+  color: #292833;
+  background: rgba(255, 255, 255, 0.78);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.5;
+  transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
+}
+
+.space-settings-field input {
+  min-height: 44px;
+}
+
+.space-settings-field textarea {
+  min-height: 112px;
+  resize: vertical;
+}
+
+.space-settings-field input:focus-visible,
+.space-settings-field textarea:focus-visible {
+  border-color: #8e8cb2;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(116, 120, 176, 0.14);
+}
+
+.space-settings-field input:disabled,
+.space-settings-field textarea:disabled {
+  color: #777681;
+  background: rgba(245, 244, 242, 0.82);
+}
+
+.space-settings-field small {
+  color: #777680;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.space-settings-optional {
+  color: #82808a;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.space-settings-feedback {
+  margin: -4px 0 0;
+  padding: 11px 13px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.space-settings-feedback.is-error {
+  border-color: #e4c7c4;
+  color: #852f2e;
+  background: #fbefed;
+}
+
+.space-settings-feedback.is-success {
+  border-color: #d2ddcf;
+  color: #3c6544;
+  background: #f0f5ed;
+}
+
+.space-settings-actions {
+  display: flex;
+  min-height: 42px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.space-settings-actions button {
+  min-height: 42px;
+  border: 1px solid #434459;
+  border-radius: 9px;
+  padding: 0 18px;
+  color: #fff;
+  background: #434459;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 140ms ease, transform 140ms ease;
+}
+
+.space-settings-actions button:hover:not(:disabled) {
+  background: #353648;
+}
+
+.space-settings-actions button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.space-settings-actions button:focus-visible {
+  outline: 3px solid rgba(116, 120, 176, 0.3);
+  outline-offset: 2px;
+}
+
+.space-settings-actions button:disabled {
+  border-color: #aaa9b1;
+  color: #f8f7f7;
+  background: #aaa9b1;
+  cursor: not-allowed;
+}
+
+.space-settings-actions > span {
+  color: #777680;
+  font-size: 12px;
+}
+
+@media (min-width: 480px) and (max-width: 680px) {
+  .space-settings-shell {
+    gap: 24px;
+    padding-inline: 34px;
+    padding-bottom: 36px;
+  }
+}
+
+@media (max-width: 479px) {
+  .space-settings-shell {
+    gap: 22px;
+    padding-inline: 22px;
+    padding-bottom: 30px;
+  }
+
+  .space-settings-heading h1 {
+    font-size: 34px;
+  }
+
+  .space-settings-form {
+    gap: 19px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .space-settings-field input,
+  .space-settings-field textarea,
+  .space-settings-actions button {
+    transition: none;
+  }
+}

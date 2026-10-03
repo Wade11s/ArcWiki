@@ -26,8 +26,8 @@ export const config: WebdriverIO.Config = {
   connectionRetryCount: 0,
   mochaOpts: { ui: "bdd", timeout: live ? 300_000 : 120_000 },
   before: async () => {
-    // There is one Tauri window. Selecting it explicitly avoids the service's
-    // optional WDIO IPC focus probe on every DOM command.
+    // Start each spec in main; secondary desktop windows are opened explicitly.
+    // This avoids the service's optional WDIO IPC focus probe on every DOM command.
     await browser.switchToWindow("main");
   },
 };

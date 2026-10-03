@@ -27,6 +27,11 @@ export type WikiPage = {
   updatedAt: string;
 };
 
+export type WikiSpaceContent = {
+  sources: WikiSource[];
+  pages: WikiPage[];
+};
+
 export type WikiSuggestion = {
   space: WikiSpace;
   score: number;

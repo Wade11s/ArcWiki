@@ -75,8 +75,10 @@ button:disabled {
 }
 
 .app-shell {
+  --sidebar-width: 258px;
+  position: relative;
   display: grid;
-  grid-template-columns: 258px minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
   width: 100%;
   height: 100%;
   min-height: 0;
@@ -85,6 +87,50 @@ button:disabled {
   transition:
     --space-accent 460ms cubic-bezier(0.2, 0.72, 0.22, 1),
     --space-tint 460ms cubic-bezier(0.2, 0.72, 0.22, 1);
+}
+
+.app-shell.is-sidebar-hidden {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.sidebar-edge-trigger {
+  position: absolute;
+  z-index: 5;
+  top: 58px;
+  bottom: 0;
+  left: 0;
+  width: 8px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.sidebar-edge-trigger:focus-visible {
+  background: color-mix(in srgb, var(--space-accent) 35%, transparent);
+  outline-offset: -3px;
+}
+
+.sidebar.is-overlay {
+  position: absolute;
+  z-index: 6;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--sidebar-width);
+  visibility: hidden;
+  transform: translateX(-100%);
+  box-shadow: 8px 0 30px rgba(45, 43, 50, 0.14);
+  transition: transform 160ms ease, visibility 160ms;
+}
+
+.sidebar.is-overlay.is-revealed {
+  visibility: visible;
+  transform: translateX(0);
+}
+
+.app-shell.is-tauri.is-sidebar-hidden .topbar {
+  padding-left: 90px;
 }
 
 html[data-space-transitioning] .app-shell {
@@ -151,7 +197,7 @@ html[data-space-transitioning] .app-shell {
   min-height: 48px;
   align-items: center;
   gap: 9px;
-  padding: 0 6px;
+  padding: 0 5px;
 }
 
 .brand-mark {
@@ -258,6 +304,12 @@ html[data-space-transitioning] .app-shell {
   margin-left: auto;
 }
 
+.sidebar-toggle {
+  width: 27px;
+  height: 27px;
+  flex: 0 0 27px;
+}
+
 .section-heading {
   display: flex;
   height: 24px;
@@ -299,18 +351,102 @@ html[data-space-transitioning] .app-shell {
   font-size: 9px;
 }
 
-.tab-list {
-  display: flex;
-  min-height: 36px;
-  max-height: min(32vh, 250px);
-  flex-direction: column;
-  gap: 2px;
+.sidebar-pins {
+  width: 100%;
+  flex: 0 0 auto;
+  margin-top: 14px;
+}
+
+.pinned-thread-action {
+  height: 35px;
+  margin-top: 2px;
+}
+
+.pinned-thread-action > svg:last-child {
+  width: 13px;
+  height: 13px;
+  margin-left: auto;
+  color: #a1a0a8;
+}
+
+.sidebar-tab-groups {
+  width: 100%;
+  min-height: 0;
+  flex: 1;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 1px 0 4px;
+  margin-top: 14px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(82, 78, 78, 0.1);
   scrollbar-width: thin;
   scrollbar-color: rgba(96, 95, 101, 0.2) transparent;
   view-transition-name: space-tabs;
+}
+
+.sidebar-tab-group + .sidebar-tab-group {
+  margin-top: 10px;
+}
+
+.tab-group-heading {
+  display: flex;
+  width: 100%;
+  height: 30px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #85848d;
+  cursor: pointer;
+  text-align: left;
+}
+
+.tab-group-heading:hover {
+  background: rgba(255, 255, 255, 0.5);
+  color: #50505a;
+}
+
+.tab-group-heading > span:first-child {
+  flex: 1;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.group-chevron {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 13px;
+}
+
+.group-chevron.is-expanded {
+  transform: rotate(90deg);
+}
+
+.tab-group-empty {
+  margin: 5px 9px 8px;
+  color: #9998a0;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.local-tab-badge {
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: rgba(115, 112, 123, 0.06);
+  color: #9997a1;
+  font-size: 8px;
+}
+
+.tab-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 1px 0 4px;
+}
+
+.tab-list[hidden] {
+  display: none;
 }
 
 .tab-row {
@@ -447,23 +583,14 @@ html[data-space-transitioning] .app-shell {
   height: 12px;
 }
 
-.sidebar-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-top: 11px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(82, 78, 78, 0.09);
-}
-
 .side-action {
   display: flex;
   width: 100%;
   height: 32px;
   align-items: center;
   gap: 9px;
-  padding: 0 8px;
-  border: 0;
+  padding: 0 9px;
+  border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
   color: #696970;
@@ -487,7 +614,7 @@ html[data-space-transitioning] .app-shell {
   stroke-width: 1.7;
 }
 
-.side-action span {
+.side-action > span:not(.tab-icon) {
   flex: 1;
   font-size: 10px;
   font-weight: 560;
@@ -505,8 +632,16 @@ html[data-space-transitioning] .app-shell {
 }
 
 .sidebar-footer {
+  flex: 0 0 auto;
   margin-top: auto;
   padding-top: 12px;
+}
+
+.sidebar-window-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
 }
 
 .storage-indicator {
@@ -605,10 +740,11 @@ html[data-space-transitioning] .app-shell {
   display: flex;
   width: 100%;
   height: 51px;
+  flex: 0 0 51px;
   align-items: center;
   gap: 9px;
   margin-top: 4px;
-  padding: 0 7px;
+  padding: 0 4px;
   border: 1px solid color-mix(in srgb, var(--space-accent) 17%, transparent);
   border-radius: 11px;
   background: color-mix(in srgb, var(--space-tint) 64%, white);
@@ -629,8 +765,8 @@ html[data-space-transitioning] .app-shell {
 }
 
 .current-space-icon svg {
-  width: 15px;
-  height: 15px;
+  width: 14px;
+  height: 14px;
   stroke-width: 1.8;
 }
 
@@ -1300,7 +1436,32 @@ html[data-space-transitioning] .app-shell {
 }
 
 .thread-header {
+  position: relative;
   padding: 4px 0 21px;
+}
+
+.archive-thread-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 12px;
+  padding: 6px 9px;
+  border: 1px solid color-mix(in srgb, var(--space-accent) 22%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--space-tint) 50%, white);
+  color: #737680;
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.archive-thread-button:hover {
+  color: var(--ink);
+  background: white;
+}
+
+.archive-thread-button svg {
+  width: 13px;
+  height: 13px;
 }
 
 .thread-kicker {
@@ -1997,7 +2158,7 @@ html[data-space-transitioning] .app-shell {
 
 @media (max-width: 980px) {
   .app-shell {
-    grid-template-columns: 238px minmax(0, 1fr);
+    --sidebar-width: 238px;
   }
 
   .content-scroll {
@@ -2013,7 +2174,7 @@ html[data-space-transitioning] .app-shell {
 
 @media (max-width: 720px) {
   .app-shell {
-    grid-template-columns: 76px minmax(0, 1fr);
+    --sidebar-width: 76px;
   }
 
   .sidebar-content {
@@ -2025,6 +2186,7 @@ html[data-space-transitioning] .app-shell {
   .brand-row {
     width: 100%;
     justify-content: center;
+    gap: 4px;
     padding: 0;
   }
 
@@ -2032,9 +2194,12 @@ html[data-space-transitioning] .app-shell {
   .sidebar-more,
   .section-heading,
   .tab-title,
+  .local-tab-badge,
+  .tab-group-heading .tab-count,
+  .pinned-thread-action > svg:last-child,
   .import-indicator,
   .tab-close,
-  .side-action span,
+  .side-action > span:not(.tab-icon),
   .side-action kbd,
   .storage-indicator,
   .space-switcher-label,
@@ -2064,7 +2229,32 @@ html[data-space-transitioning] .app-shell {
 
   .tab-list {
     align-items: center;
-    max-height: 35vh;
+  }
+
+  .tab-group-heading {
+    height: 38px;
+    gap: 2px;
+    padding: 0 4px;
+  }
+
+  .tab-group-heading > span:first-child {
+    min-width: 0;
+    font-size: 8px;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+  }
+
+  .group-chevron {
+    width: 10px;
+    height: 10px;
+    flex-basis: 10px;
+  }
+
+  .tab-group-empty {
+    margin-right: 4px;
+    margin-left: 4px;
+    font-size: 8px;
+    text-align: center;
   }
 
   .tab-row {
@@ -2089,13 +2279,18 @@ html[data-space-transitioning] .app-shell {
     height: 16px;
   }
 
-  .sidebar-actions {
-    width: 100%;
+  .sidebar-pins {
+    display: flex;
+    flex-direction: column;
     align-items: center;
   }
 
   .sidebar-footer {
     width: 100%;
+  }
+
+  .sidebar-window-actions {
+    align-items: center;
   }
 
   .side-action {
@@ -2113,6 +2308,7 @@ html[data-space-transitioning] .app-shell {
   .current-space-card {
     width: 44px;
     height: 44px;
+    flex-basis: 44px;
     justify-content: center;
     margin-right: auto;
     margin-left: auto;
